@@ -1,0 +1,110 @@
+name: Create Release for Analysis Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      prefix:
+        description: "Artifact name prefix"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.ORG_WIDE_TOKEN }}
+
+    steps:
+      - name: Create timestamp
+        id: ts
+        run: |
+          ts="$(date -u +%Y%m%dT%H%M%SZ)"
+          echo "ts=$ts" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        id: create-release
+        run: |
+          tag="analysis-${{ steps.ts.outputs.ts }}"
+          name="Continuous Analysis Release (${{ steps.ts.outputs.ts }})"
+
+          echo "Creating release: $name"
+
+          response=$(curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\": \"$tag\", \"name\": \"$name\", \"draft\": false}" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases")
+
+          upload_url=$(echo "$response" | jq -r '.upload_url' | sed 's/{?name,label}//')
+          echo "upload_url=$upload_url" >> $GITHUB_OUTPUT
+
+      - name: Fetch all artifact metadata
+        id: fetch
+        run: |
+          echo "Fetching all artifacts..."
+
+          page=1
+          all="[]"
+          while true; do
+            response=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100&page=$page")
+
+            artifacts=$(echo "$response" | jq -c '.artifacts[]?')
+            if [[ -z "$artifacts" ]]; then break; fi
+
+            while IFS= read -r art; do
+              all=$(echo "$all" | jq --argjson a "$art" '. + [$a]')
+            done <<< "$artifacts"
+
+            count=$(echo "$response" | jq '.artifacts | length')
+            (( count < 100 )) && break
+
+            ((page++))
+          done
+
+          echo "$all" > all_artifacts.json
+          echo "Saved metadata for all artifacts."
+
+      - name: Upload matching artifacts to release
+        run: |
+          prefix="${{ inputs.prefix }}"
+          upload_url="${{ steps.create-release.outputs.upload_url }}"
+
+          echo "Looking for artifacts starting with: $prefix"
+          echo ""
+
+          matches=$(jq -c --arg p "$prefix" '.[] | select(.name | startswith($p))' all_artifacts.json)
+
+          if [[ "$(echo "$matches" | wc -l)" -eq 0 ]]; then
+            echo "❌ No artifacts found starting with: $prefix"
+            exit 1
+          fi
+
+          echo "$matches" | while IFS= read -r art; do
+            name=$(echo "$art" | jq -r '.name')
+            id=$(echo "$art" | jq -r '.id')
+            zip="${name}.zip"
+
+            echo "▶ Downloading artifact: $name (ID $id)"
+
+            curl -L -s \
+              -H "Authorization: token $GH_TOKEN" \
+              -o "$zip" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip"
+
+            echo "⬆ Uploading $zip to release..."
+
+            curl -s -X POST \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/zip" \
+              --data-binary @"$zip" \
+              "${upload_url}?name=${zip}"
+
+            echo "✓ Uploaded: $zip"
+            echo ""
+          done
+
+          echo "🎉 Release upload completed successfully!"
