@@ -16,7 +16,7 @@ env:
   BRANCH: "main"
   RUNNER_DISPATCH_TIMEOUT: 7200 # 2 hours
   FILTER_DISPATCH_TIMEOUT: 1800 # 30 minutes
-  MAX_CONCURRENT: 1
+  MAX_CONCURRENT: 12
 
 jobs:
   monitor-open-prs:
@@ -119,14 +119,16 @@ jobs:
               continue
             fi
 
-            # Add the PR to the prs_to_analyze.json array
-            echo "PR #${pr_num} head=${head_sha} merge_base=${merge_base_sha} (branch ${head_ref})"
+            # One dispatch_id per PR, reused in analysis and filter steps
+            dispatch_id="pr-${pr_num}-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
+            echo "PR #${pr_num} dispatch_id=${dispatch_id} head=${head_sha} merge_base=${merge_base_sha} (branch ${head_ref})"
             entry=$(jq -n \
               --arg pr "$pr_num" \
               --arg head "$head_sha" \
               --arg base "$merge_base_sha" \
               --arg ref "$head_ref" \
-              '{pr_number: $pr, head_sha: $head, merge_base_sha: $base, head_ref: $ref}')
+              --arg did "$dispatch_id" \
+              '{pr_number: $pr, head_sha: $head, merge_base_sha: $base, head_ref: $ref, dispatch_id: $did}')
             results=$(echo "$results" | jq --argjson e "$entry" '. + [$e]')
           done
 
@@ -204,17 +206,13 @@ jobs:
             # Initialize array to store the batch artifacts
             declare -a batch_artifacts=()
 
-            # Iterate over the PRs in the batch
+            # Iterate over the PRs in the batch (reuse dispatch_id from Step 1)
             for ((idx=batch_start; idx<batch_end; idx++)); do
-  
-              # Get the PR number, head SHA and base SHA
               pr_num=$(jq -r ".[$idx].pr_number" prs_to_analyze.json)
               head_sha=$(jq -r ".[$idx].head_sha" prs_to_analyze.json)
               base_sha=$(jq -r ".[$idx].merge_base_sha" prs_to_analyze.json)
-
-              # Generate a dispatch ID for the PR
-              dispatch_id="pr-${pr_num}-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
-              echo "  PR #${pr_num}: dispatch_id=${dispatch_id}"
+              dispatch_id=$(jq -r ".[$idx].dispatch_id" prs_to_analyze.json)
+              echo "  PR #${pr_num}: dispatch_id=${dispatch_id}, base_sha=${base_sha}, head_sha=${head_sha}"
 
               # Trigger the analysis workflow for the base SHA
               gh workflow run run-analysis.yml \
@@ -264,57 +262,107 @@ jobs:
             echo "Batch completed."
           done
 
-      # # --------------------------------------------------------------------
-      # # STEP 4 — TRIGGER FILTER WORKFLOWS (DIVERGENCE = MERGE BASE)
-      # # --------------------------------------------------------------------
-      # - name: Run violation filter workflows for PRs
-      #   if: steps.fetch-prs.outputs.pr_count != '0'
-      #   env:
-      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #     BRANCH: ${{ env.BRANCH }}
-      #   run: |
-      #     set -euo pipefail
+      # --------------------------------------------------------------------
+      # STEP 4 — TRIGGER FILTER WORKFLOWS
+      # --------------------------------------------------------------------
+      - name: Run violation filter workflows for PRs
+        if: steps.fetch-prs.outputs.pr_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.ORG_WIDE_TOKEN }}
+          BRANCH: ${{ env.BRANCH }}
+        run: |
+          set -euo pipefail
 
-      #     FILTER_DISPATCH_TIMEOUT=${{ env.FILTER_DISPATCH_TIMEOUT }}
-      #     repo_name=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f2)
+          # Get the repository name, filter dispatch timeout and max concurrent
+          repo_name=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f2)
+          FILTER_DISPATCH_TIMEOUT=${{ env.FILTER_DISPATCH_TIMEOUT }}
+          MAX_CONCURRENT=${{ env.MAX_CONCURRENT }}
 
-      #     echo "Running violation filters (current = PR head, previous = merge base)..."
+          # Get the total number of PRs to analyze
+          total_prs=$(jq 'length' prs_to_analyze.json)
+          echo "Running violation filters in batches of ${MAX_CONCURRENT} PR(s) (base first, then head)..."
 
-      #     for idx in $(seq 0 $(($(jq 'length' prs_to_analyze.json) - 1))); do
-      #       current=$(jq -r ".[$idx].head_sha" prs_to_analyze.json)
-      #       previous=$(jq -r ".[$idx].merge_base_sha" prs_to_analyze.json)
-      #       pr_num=$(jq -r ".[$idx].pr_number" prs_to_analyze.json)
+          # Iterate over the PRs in batches of max concurrent
+          for ((batch_start=0; batch_start<total_prs; batch_start+=MAX_CONCURRENT)); do
 
-      #       echo "Filter PR #${pr_num}: current=$current previous=$previous"
+            # Get the batch end and size
+            batch_end=$((batch_start + MAX_CONCURRENT))
+            ((batch_end > total_prs)) && batch_end=$total_prs
+            batch_size=$((batch_end - batch_start))
+            echo "Filter batch: PRs $((batch_start+1))–${batch_end} (${batch_size} PRs)"
 
-      #       artifact="continuous-analysis-future-filtered-results-${repo_name}-${current}"
+            # --- Phase 1: dispatch and wait for BASE filter (reuse dispatch_id from Step 1) ---
+            declare -a batch_base_artifacts=()
+            for ((idx=batch_start; idx<batch_end; idx++)); do
+              pr_num=$(jq -r ".[$idx].pr_number" prs_to_analyze.json)
+              base_sha=$(jq -r ".[$idx].merge_base_sha" prs_to_analyze.json)
+              dispatch_id=$(jq -r ".[$idx].dispatch_id" prs_to_analyze.json)
 
-      #       gh workflow run run-filter.yml \
-      #         --repo "${GITHUB_REPOSITORY}" \
-      #         --ref "${BRANCH}" \
-      #         --field current_commit="$current" \
-      #         --field previous_commit="$previous" \
-      #         --field dispatch_id="" \
-      #         --field skip_commits_pattern="0"
+              gh workflow run run-filter.yml \
+                --repo "${GITHUB_REPOSITORY}" \
+                --ref "${BRANCH}" \
+                --field current_commit="$base_sha" \
+                --field previous_commit="" \
+                --field dispatch_type="prs" \
+                --field dispatch_id="$dispatch_id" \
+                --field skip_commits_pattern="0"
 
-      #       end_time=$(( $(date +%s) + FILTER_DISPATCH_TIMEOUT ))
-      #       created=false
-      #       while ! $created && [[ $(date +%s) -lt $end_time ]]; do
-      #         names=$(curl -s -H "Authorization: token $GH_TOKEN" \
-      #           "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
-      #           | jq -r '.artifacts[].name')
-      #         if echo "$names" | grep -q "^${artifact}"; then
-      #           echo "  ✓ Filter artifact: ${artifact}"
-      #           created=true
-      #           break
-      #         fi
-      #         sleep 30
-      #       done
+              batch_base_artifacts+=("continuous-analysis-prs-filtered-results-${dispatch_id}-${repo_name}-${base_sha}")
+            done
 
-      #       if ! $created; then
-      #         echo "ERROR: Timeout waiting for filter artifact: ${artifact}"
-      #         exit 1
-      #       fi
-      #     done
+            echo "Waiting for ${#batch_base_artifacts[@]} base filter artifact(s)..."
+            end_time=$(( $(date +%s) + FILTER_DISPATCH_TIMEOUT ))
+            done_base=()
+            while [[ $(date +%s) -lt $end_time ]]; do
+              names=$(curl -s -H "Authorization: token $GH_TOKEN" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+                | jq -r '.artifacts[].name')
+              for art in "${batch_base_artifacts[@]}"; do
+                [[ " ${done_base[@]} " =~ " ${art} " ]] && continue
+                echo "$names" | grep -q "^${art}" && { done_base+=("$art"); echo "  ✓ $art"; }
+              done
+              [[ ${#done_base[@]} -eq ${#batch_base_artifacts[@]} ]] && break
+              sleep 30
+            done
+            [[ ${#done_base[@]} -ne ${#batch_base_artifacts[@]} ]] && { echo "ERROR: Timeout waiting for base filter artifacts."; exit 1; }
 
-      #     echo "All PR violation filters completed."
+            # --- Phase 2: dispatch and wait for HEAD filter (reuse same dispatch_id per PR) ---
+            declare -a batch_head_artifacts=()
+            for ((idx=batch_start; idx<batch_end; idx++)); do
+              pr_num=$(jq -r ".[$idx].pr_number" prs_to_analyze.json)
+              head_sha=$(jq -r ".[$idx].head_sha" prs_to_analyze.json)
+              base_sha=$(jq -r ".[$idx].merge_base_sha" prs_to_analyze.json)
+              dispatch_id=$(jq -r ".[$idx].dispatch_id" prs_to_analyze.json)
+
+              gh workflow run run-filter.yml \
+                --repo "${GITHUB_REPOSITORY}" \
+                --ref "${BRANCH}" \
+                --field current_commit="$head_sha" \
+                --field previous_commit="$base_sha" \
+                --field dispatch_type="prs" \
+                --field dispatch_id="$dispatch_id" \
+                --field skip_commits_pattern="0"
+
+              batch_head_artifacts+=("continuous-analysis-prs-filtered-results-${dispatch_id}-${repo_name}-${head_sha}")
+            done
+
+            echo "Waiting for ${#batch_head_artifacts[@]} head filter artifact(s)..."
+            end_time=$(( $(date +%s) + FILTER_DISPATCH_TIMEOUT ))
+            done_head=()
+            while [[ $(date +%s) -lt $end_time ]]; do
+              names=$(curl -s -H "Authorization: token $GH_TOKEN" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+                | jq -r '.artifacts[].name')
+              for art in "${batch_head_artifacts[@]}"; do
+                [[ " ${done_head[@]} " =~ " ${art} " ]] && continue
+                echo "$names" | grep -q "^${art}" && { done_head+=("$art"); echo "  ✓ $art"; }
+              done
+              [[ ${#done_head[@]} -eq ${#batch_head_artifacts[@]} ]] && break
+              sleep 30
+            done
+            [[ ${#done_head[@]} -ne ${#batch_head_artifacts[@]} ]] && { echo "ERROR: Timeout waiting for head filter artifacts."; exit 1; }
+
+            echo "Filter batch completed."
+          done
+
+          echo "All PR violation filters completed."
