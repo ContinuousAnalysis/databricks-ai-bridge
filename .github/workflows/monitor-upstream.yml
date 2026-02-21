@@ -164,6 +164,7 @@ jobs:
                 --repo "${GITHUB_REPOSITORY}" \
                 --ref "${BRANCH}" \
                 --field commit="$commit" \
+                --field dispatch_type="history" \
                 --field dispatch_id="$dispatch_id"
 
               dispatched_commits+=("$commit")
