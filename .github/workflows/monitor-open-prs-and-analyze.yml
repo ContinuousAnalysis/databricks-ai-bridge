@@ -9,6 +9,7 @@ permissions:
   actions: write
   contents: write
   pull-requests: read
+  workflows: write
 
 # NEED TO BE CONFIGURED EACH PROJECT
 env:
@@ -25,25 +26,31 @@ jobs:
     steps:
       # --------------------------------------------------------------------
       # STEP 1 — FETCH OPEN PRs FROM UPSTREAM VIA GITHUB API
-      # (No token: public repos allow unauthenticated read. Works when upstream is not yours.)
       # --------------------------------------------------------------------
       - name: Fetch open PRs and merge bases from upstream
         id: fetch-prs
+        env:
+          GH_TOKEN: ${{ secrets.ORG_WIDE_TOKEN }}
         run: |
           set -euo pipefail
 
           echo "Fetching open PRs from upstream ${UPSTREAM_REPO}..."
 
+          # Read all open PRs from the upstream repository
           prs_json="[]"
           page=1
           per_page=100
           while true; do
-            batch=$(curl -s -H "Accept: application/vnd.github.v3+json" \
+            batch=$(curl -s -H "Accept: application/vnd.github.v3+json" -H "Authorization: token $GH_TOKEN" \
               "https://api.github.com/repos/${UPSTREAM_REPO}/pulls?state=open&per_page=${per_page}&page=${page}")
+
+            # Check if the response is a valid array
             if ! echo "$batch" | jq -e 'type == "array"' >/dev/null 2>&1; then
               echo "API error or non-array response: $(echo "$batch" | jq -c . 2>/dev/null || echo "$batch")"
               break
             fi
+
+            # Get the number of PRs in the batch and add them to the prs_json array
             count=$(echo "$batch" | jq 'length')
             [[ "$count" -eq 0 ]] && break
             prs_json=$(echo "$prs_json" "$batch" | jq -s 'add')
@@ -51,39 +58,53 @@ jobs:
             page=$((page + 1))
           done
 
+          # Get the total number of PRs in the prs_json array
           pr_count=$(echo "$prs_json" | jq 'length')
           echo "Found $pr_count open PR(s) in upstream."
 
+          # If there are no PRs, exit
           if [[ "$pr_count" -eq 0 ]]; then
             echo '[]' > prs_to_analyze.json
             echo "pr_count=0" >> $GITHUB_OUTPUT
+            echo "No PRs to analyze in upstream."
             exit 0
           fi
 
+          # Get the repository name
           repo_name=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f2)
           results="[]"
           base_ref="${BRANCH}"
 
+          # Iterate over the PRs and add them to the prs_to_analyze.json array
           for idx in $(seq 0 $((pr_count - 1))); do
             head_repo=$(echo "$prs_json" | jq -r ".[$idx].head.repo.full_name")
+
+            # Check if the PR is from the upstream repository
             if [[ "$head_repo" != "$UPSTREAM_REPO" ]]; then
+
+              # If the PR is not from the upstream repository, skip it
               pr_num=$(echo "$prs_json" | jq -r ".[$idx].number")
               echo "Skipping PR #${pr_num} (head from fork: ${head_repo})"
               continue
             fi
 
+            # Get the head SHA and PR number
             head_sha=$(echo "$prs_json" | jq -r ".[$idx].head.sha")
             pr_num=$(echo "$prs_json" | jq -r ".[$idx].number")
             head_ref=$(echo "$prs_json" | jq -r ".[$idx].head.ref")
 
-            compare=$(curl -s -H "Accept: application/vnd.github.v3+json" \
+            # Get the merge base SHA
+            compare=$(curl -s -H "Accept: application/vnd.github.v3+json" -H "Authorization: token $GH_TOKEN" \
               "https://api.github.com/repos/${UPSTREAM_REPO}/compare/${base_ref}...${head_sha}")
             merge_base_sha=$(echo "$compare" | jq -r '.merge_base_commit.sha // empty')
+
+            # If the merge base SHA is not found, skip the PR
             if [[ -z "$merge_base_sha" ]] || [[ "$merge_base_sha" == "null" ]]; then
               echo "Skipping PR #${pr_num}: could not get merge base"
               continue
             fi
 
+            # Get the files changed in the PR to make sure there are Python files changed
             files=$(echo "$compare" | jq -r '.files[]?.filename // empty')
             has_py=false
             if [[ -n "$files" ]]; then
@@ -92,11 +113,14 @@ jobs:
                 if [[ "$f" == *.py ]]; then has_py=true; break; fi
               done <<< "$files"
             fi
+
+            # If there are no Python files changed, skip the PR
             if ! $has_py; then
               echo "Skipping PR #${pr_num}: no Python files changed"
               continue
             fi
 
+            # Add the PR to the prs_to_analyze.json array
             echo "PR #${pr_num} head=${head_sha} merge_base=${merge_base_sha} (branch ${head_ref})"
             entry=$(jq -n \
               --arg pr "$pr_num" \
@@ -107,6 +131,7 @@ jobs:
             results=$(echo "$results" | jq --argjson e "$entry" '. + [$e]')
           done
 
+          # Save the prs_to_analyze.json array to a file
           echo "$results" > prs_to_analyze.json
           count=$(echo "$results" | jq 'length')
           echo "pr_count=$count" >> $GITHUB_OUTPUT
@@ -116,20 +141,25 @@ jobs:
       # STEP 2 — FETCH PR HEADS FROM UPSTREAM INTO CURRENT REPO
       # --------------------------------------------------------------------
       - name: Fetch upstream PR refs and push into current repo
-        if: steps.fetch-prs.outputs.pr_count != '0'
+        if: steps.fetch-prs.outputs.pr_count != '0'  # Only run if there are PRs to analyze
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
+          # Clone the current repository into a new directory
           git clone --no-tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" push-repo
           cd push-repo
+
+          # Configure the git user
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Add the upstream repository as a remote
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" || true
           git fetch upstream --no-tags
 
+          # Iterate over the PRs and fetch the head SHA into the current repository
           for idx in $(seq 0 $(($(jq 'length' ../prs_to_analyze.json) - 1))); do
             pr_num=$(jq -r ".[$idx].pr_number" ../prs_to_analyze.json)
             head_sha=$(jq -r ".[$idx].head_sha" ../prs_to_analyze.json)
@@ -138,162 +168,163 @@ jobs:
             git push origin "pr-${pr_num}" || true
           done
 
+          # Go back to the root directory and remove the temporary repository
           cd ..
           rm -rf push-repo
-          echo "PR head refs are now in current repo."
+          echo "PR heads are now in current repo."
 
-      # --------------------------------------------------------------------
-      # STEP 3 — TRIGGER ANALYSIS WORKFLOWS FOR EACH PR BRANCH
-      # --------------------------------------------------------------------
-      - name: Run analysis workflows for PR branches
-        if: steps.fetch-prs.outputs.pr_count != '0'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ env.BRANCH }}
-        run: |
-          set -euo pipefail
+      # # --------------------------------------------------------------------
+      # # STEP 3 — TRIGGER ANALYSIS WORKFLOWS FOR EACH PR BRANCH
+      # # --------------------------------------------------------------------
+      # - name: Run analysis workflows for PR branches
+      #   if: steps.fetch-prs.outputs.pr_count != '0'  # Only run if there are PRs to analyze
+      #   env:
+      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #     BRANCH: ${{ env.BRANCH }}
+      #   run: |
+      #     set -euo pipefail
 
-          pr_count=$(jq 'length' prs_to_analyze.json)
-          [[ "$pr_count" -eq 0 ]] && { echo "No PRs to analyze."; exit 0; }
+      #     pr_count=$(jq 'length' prs_to_analyze.json)
+      #     [[ "$pr_count" -eq 0 ]] && { echo "No PRs to analyze."; exit 0; }
 
-          repo_name=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f2)
-          MAX_CONCURRENT=${{ env.MAX_CONCURRENT }}
-          RUNNER_DISPATCH_TIMEOUT=${{ env.RUNNER_DISPATCH_TIMEOUT }}
+      #     repo_name=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f2)
+      #     MAX_CONCURRENT=${{ env.MAX_CONCURRENT }}
+      #     RUNNER_DISPATCH_TIMEOUT=${{ env.RUNNER_DISPATCH_TIMEOUT }}
 
-          declare -a heads_to_process=()
-          declare -a artifacts_to_process=()
-          mapfile -t head_shas < <(jq -r '.[].head_sha' prs_to_analyze.json)
+      #     declare -a heads_to_process=()
+      #     declare -a artifacts_to_process=()
+      #     mapfile -t head_shas < <(jq -r '.[].head_sha' prs_to_analyze.json)
 
-          for head_sha in "${head_shas[@]}"; do
-            artifact="continuous-analysis-results-${repo_name}-${head_sha}"
-            artifact_exists=false
-            page=1
-            per_page=100
-            while true; do
-              response=$(curl -s -H "Authorization: token $GH_TOKEN" \
-                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=${per_page}&page=${page}")
-              artifact_names=$(echo "$response" | jq -r '.artifacts[].name')
-              if echo "$artifact_names" | grep -q "^${artifact}"; then
-                artifact_exists=true
-                break
-              fi
-              [[ -z "$artifact_names" ]] || [[ $(echo "$artifact_names" | wc -l) -lt $per_page ]] && break
-              page=$((page + 1))
-            done
+      #     for head_sha in "${head_shas[@]}"; do
+      #       artifact="continuous-analysis-results-${repo_name}-${head_sha}"
+      #       artifact_exists=false
+      #       page=1
+      #       per_page=100
+      #       while true; do
+      #         response=$(curl -s -H "Authorization: token $GH_TOKEN" \
+      #           "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=${per_page}&page=${page}")
+      #         artifact_names=$(echo "$response" | jq -r '.artifacts[].name')
+      #         if echo "$artifact_names" | grep -q "^${artifact}"; then
+      #           artifact_exists=true
+      #           break
+      #         fi
+      #         [[ -z "$artifact_names" ]] || [[ $(echo "$artifact_names" | wc -l) -lt $per_page ]] && break
+      #         page=$((page + 1))
+      #       done
 
-            if $artifact_exists; then
-              echo " ✓ Artifact exists: ${artifact} - skip"
-            else
-              echo " ✗ Will analyze PR branch: ${head_sha}"
-              heads_to_process+=("$head_sha")
-              artifacts_to_process+=("$artifact")
-            fi
-          done
+      #       if $artifact_exists; then
+      #         echo " ✓ Artifact exists: ${artifact} - skip"
+      #       else
+      #         echo " ✗ Will analyze PR branch: ${head_sha}"
+      #         heads_to_process+=("$head_sha")
+      #         artifacts_to_process+=("$artifact")
+      #       fi
+      #     done
 
-          total_to_process=${#heads_to_process[@]}
-          if [[ $total_to_process -eq 0 ]]; then
-            echo "All PR branches already have analysis artifacts. Skipping dispatch."
-            exit 0
-          fi
+      #     total_to_process=${#heads_to_process[@]}
+      #     if [[ $total_to_process -eq 0 ]]; then
+      #       echo "All PR branches already have analysis artifacts. Skipping dispatch."
+      #       exit 0
+      #     fi
 
-          echo "Dispatching analysis for ${total_to_process} PR head commit(s)..."
+      #     echo "Dispatching analysis for ${total_to_process} PR head commit(s)..."
 
-          for ((batch_start=0; batch_start<total_to_process; batch_start+=MAX_CONCURRENT)); do
-            batch_end=$((batch_start + MAX_CONCURRENT))
-            ((batch_end > total_to_process)) && batch_end=$total_to_process
+      #     for ((batch_start=0; batch_start<total_to_process; batch_start+=MAX_CONCURRENT)); do
+      #       batch_end=$((batch_start + MAX_CONCURRENT))
+      #       ((batch_end > total_to_process)) && batch_end=$total_to_process
 
-            declare -a dispatched_heads=()
-            declare -a dispatched_artifacts=()
+      #       declare -a dispatched_heads=()
+      #       declare -a dispatched_artifacts=()
 
-            for ((i=batch_start; i<batch_end; i++)); do
-              head_sha="${heads_to_process[$i]}"
-              artifact="${artifacts_to_process[$i]}"
-              echo "  Dispatching analysis for commit $head_sha"
-              gh workflow run run-analysis.yml \
-                --repo "${GITHUB_REPOSITORY}" \
-                --ref "${BRANCH}" \
-                --field commit="$head_sha" \
-                --field dispatch_id=""
-              dispatched_heads+=("$head_sha")
-              dispatched_artifacts+=("$artifact")
-            done
+      #       for ((i=batch_start; i<batch_end; i++)); do
+      #         head_sha="${heads_to_process[$i]}"
+      #         artifact="${artifacts_to_process[$i]}"
+      #         echo "  Dispatching analysis for commit $head_sha"
+      #         gh workflow run run-analysis.yml \
+      #           --repo "${GITHUB_REPOSITORY}" \
+      #           --ref "${BRANCH}" \
+      #           --field commit="$head_sha" \
+      #           --field dispatch_id=""
+      #         dispatched_heads+=("$head_sha")
+      #         dispatched_artifacts+=("$artifact")
+      #       done
 
-            echo "Waiting for batch artifacts (timeout ${RUNNER_DISPATCH_TIMEOUT}s)..."
-            end_time=$(( $(date +%s) + RUNNER_DISPATCH_TIMEOUT ))
-            declare -a done=()
+      #       echo "Waiting for batch artifacts (timeout ${RUNNER_DISPATCH_TIMEOUT}s)..."
+      #       end_time=$(( $(date +%s) + RUNNER_DISPATCH_TIMEOUT ))
+      #       declare -a done=()
 
-            while [[ ${#done[@]} -lt ${#dispatched_heads[@]} && $(date +%s) -lt $end_time ]]; do
-              names=$(curl -s -H "Authorization: token $GH_TOKEN" \
-                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
-                | jq -r '.artifacts[].name')
-              for idx in "${!dispatched_heads[@]}"; do
-                if [[ " ${done[@]} " =~ " ${dispatched_heads[$idx]} " ]]; then continue; fi
-                if echo "$names" | grep -q "^${dispatched_artifacts[$idx]}"; then
-                  echo "  ✓ Artifact: ${dispatched_artifacts[$idx]}"
-                  done+=("${dispatched_heads[$idx]}")
-                fi
-              done
-              [[ ${#done[@]} -lt ${#dispatched_heads[@]} ]] && sleep 60
-            done
+      #       while [[ ${#done[@]} -lt ${#dispatched_heads[@]} && $(date +%s) -lt $end_time ]]; do
+      #         names=$(curl -s -H "Authorization: token $GH_TOKEN" \
+      #           "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+      #           | jq -r '.artifacts[].name')
+      #         for idx in "${!dispatched_heads[@]}"; do
+      #           if [[ " ${done[@]} " =~ " ${dispatched_heads[$idx]} " ]]; then continue; fi
+      #           if echo "$names" | grep -q "^${dispatched_artifacts[$idx]}"; then
+      #             echo "  ✓ Artifact: ${dispatched_artifacts[$idx]}"
+      #             done+=("${dispatched_heads[$idx]}")
+      #           fi
+      #         done
+      #         [[ ${#done[@]} -lt ${#dispatched_heads[@]} ]] && sleep 60
+      #       done
 
-            if [[ ${#done[@]} -lt ${#dispatched_heads[@]} ]]; then
-              echo "ERROR: Timeout waiting for analysis artifacts."
-              exit 1
-            fi
-            echo "Batch completed."
-          done
+      #       if [[ ${#done[@]} -lt ${#dispatched_heads[@]} ]]; then
+      #         echo "ERROR: Timeout waiting for analysis artifacts."
+      #         exit 1
+      #       fi
+      #       echo "Batch completed."
+      #     done
 
-      # --------------------------------------------------------------------
-      # STEP 4 — TRIGGER FILTER WORKFLOWS (DIVERGENCE = MERGE BASE)
-      # --------------------------------------------------------------------
-      - name: Run violation filter workflows for PRs
-        if: steps.fetch-prs.outputs.pr_count != '0'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ env.BRANCH }}
-        run: |
-          set -euo pipefail
+      # # --------------------------------------------------------------------
+      # # STEP 4 — TRIGGER FILTER WORKFLOWS (DIVERGENCE = MERGE BASE)
+      # # --------------------------------------------------------------------
+      # - name: Run violation filter workflows for PRs
+      #   if: steps.fetch-prs.outputs.pr_count != '0'
+      #   env:
+      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #     BRANCH: ${{ env.BRANCH }}
+      #   run: |
+      #     set -euo pipefail
 
-          FILTER_DISPATCH_TIMEOUT=${{ env.FILTER_DISPATCH_TIMEOUT }}
-          repo_name=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f2)
+      #     FILTER_DISPATCH_TIMEOUT=${{ env.FILTER_DISPATCH_TIMEOUT }}
+      #     repo_name=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f2)
 
-          echo "Running violation filters (current = PR head, previous = merge base)..."
+      #     echo "Running violation filters (current = PR head, previous = merge base)..."
 
-          for idx in $(seq 0 $(($(jq 'length' prs_to_analyze.json) - 1))); do
-            current=$(jq -r ".[$idx].head_sha" prs_to_analyze.json)
-            previous=$(jq -r ".[$idx].merge_base_sha" prs_to_analyze.json)
-            pr_num=$(jq -r ".[$idx].pr_number" prs_to_analyze.json)
+      #     for idx in $(seq 0 $(($(jq 'length' prs_to_analyze.json) - 1))); do
+      #       current=$(jq -r ".[$idx].head_sha" prs_to_analyze.json)
+      #       previous=$(jq -r ".[$idx].merge_base_sha" prs_to_analyze.json)
+      #       pr_num=$(jq -r ".[$idx].pr_number" prs_to_analyze.json)
 
-            echo "Filter PR #${pr_num}: current=$current previous=$previous"
+      #       echo "Filter PR #${pr_num}: current=$current previous=$previous"
 
-            artifact="continuous-analysis-future-filtered-results-${repo_name}-${current}"
+      #       artifact="continuous-analysis-future-filtered-results-${repo_name}-${current}"
 
-            gh workflow run run-filter.yml \
-              --repo "${GITHUB_REPOSITORY}" \
-              --ref "${BRANCH}" \
-              --field current_commit="$current" \
-              --field previous_commit="$previous" \
-              --field dispatch_id="" \
-              --field skip_commits_pattern="0"
+      #       gh workflow run run-filter.yml \
+      #         --repo "${GITHUB_REPOSITORY}" \
+      #         --ref "${BRANCH}" \
+      #         --field current_commit="$current" \
+      #         --field previous_commit="$previous" \
+      #         --field dispatch_id="" \
+      #         --field skip_commits_pattern="0"
 
-            end_time=$(( $(date +%s) + FILTER_DISPATCH_TIMEOUT ))
-            created=false
-            while ! $created && [[ $(date +%s) -lt $end_time ]]; do
-              names=$(curl -s -H "Authorization: token $GH_TOKEN" \
-                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
-                | jq -r '.artifacts[].name')
-              if echo "$names" | grep -q "^${artifact}"; then
-                echo "  ✓ Filter artifact: ${artifact}"
-                created=true
-                break
-              fi
-              sleep 30
-            done
+      #       end_time=$(( $(date +%s) + FILTER_DISPATCH_TIMEOUT ))
+      #       created=false
+      #       while ! $created && [[ $(date +%s) -lt $end_time ]]; do
+      #         names=$(curl -s -H "Authorization: token $GH_TOKEN" \
+      #           "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+      #           | jq -r '.artifacts[].name')
+      #         if echo "$names" | grep -q "^${artifact}"; then
+      #           echo "  ✓ Filter artifact: ${artifact}"
+      #           created=true
+      #           break
+      #         fi
+      #         sleep 30
+      #       done
 
-            if ! $created; then
-              echo "ERROR: Timeout waiting for filter artifact: ${artifact}"
-              exit 1
-            fi
-          done
+      #       if ! $created; then
+      #         echo "ERROR: Timeout waiting for filter artifact: ${artifact}"
+      #         exit 1
+      #       fi
+      #     done
 
-          echo "All PR violation filters completed."
+      #     echo "All PR violation filters completed."
