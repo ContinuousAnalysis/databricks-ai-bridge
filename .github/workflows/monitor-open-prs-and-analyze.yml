@@ -307,7 +307,7 @@ jobs:
                 --field dispatch_id="$dispatch_id" \
                 --field skip_commits_pattern="0"
 
-              batch_base_artifacts+=("continuous-analysis-prs-filtered-results-${dispatch_id}-${repo_name}-${base_sha}")
+              batch_base_artifacts+=("continuous-analysis-prs-filtered-base-results-${dispatch_id}-${repo_name}-${base_sha}")
             done
 
             echo "Waiting for ${#batch_base_artifacts[@]} base filter artifact(s)..."
