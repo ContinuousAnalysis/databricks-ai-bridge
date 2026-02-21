@@ -9,7 +9,6 @@ permissions:
   actions: write
   contents: write
   pull-requests: read
-  workflows: write
 
 # NEED TO BE CONFIGURED EACH PROJECT
 env:
@@ -143,12 +142,12 @@ jobs:
       - name: Fetch upstream PR refs and push into current repo
         if: steps.fetch-prs.outputs.pr_count != '0'  # Only run if there are PRs to analyze
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUSH_TOKEN: ${{ secrets.ORG_WIDE_TOKEN }}
         run: |
           set -euo pipefail
 
           # Clone the current repository into a new directory
-          git clone --no-tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" push-repo
+          git clone --no-tags "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" push-repo
           cd push-repo
 
           # Configure the git user
