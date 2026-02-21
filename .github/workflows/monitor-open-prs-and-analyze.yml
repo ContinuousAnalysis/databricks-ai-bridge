@@ -2,7 +2,7 @@ name: Monitor Open PRs and Run Analysis
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "30 */6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -25,23 +25,25 @@ jobs:
     steps:
       # --------------------------------------------------------------------
       # STEP 1 — FETCH OPEN PRs FROM UPSTREAM VIA GITHUB API
+      # (No token: public repos allow unauthenticated read. Works when upstream is not yours.)
       # --------------------------------------------------------------------
       - name: Fetch open PRs and merge bases from upstream
         id: fetch-prs
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
           echo "Fetching open PRs from upstream ${UPSTREAM_REPO}..."
 
-          # List all open PRs from the upstream repository
           prs_json="[]"
           page=1
           per_page=100
           while true; do
-            batch=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            batch=$(curl -s -H "Accept: application/vnd.github.v3+json" \
               "https://api.github.com/repos/${UPSTREAM_REPO}/pulls?state=open&per_page=${per_page}&page=${page}")
+            if ! echo "$batch" | jq -e 'type == "array"' >/dev/null 2>&1; then
+              echo "API error or non-array response: $(echo "$batch" | jq -c . 2>/dev/null || echo "$batch")"
+              break
+            fi
             count=$(echo "$batch" | jq 'length')
             [[ "$count" -eq 0 ]] && break
             prs_json=$(echo "$prs_json" "$batch" | jq -s 'add')
@@ -64,8 +66,6 @@ jobs:
 
           for idx in $(seq 0 $((pr_count - 1))); do
             head_repo=$(echo "$prs_json" | jq -r ".[$idx].head.repo.full_name")
-
-            # Only process PRs whose head branch is in the upstream repo (skip fork PRs)
             if [[ "$head_repo" != "$UPSTREAM_REPO" ]]; then
               pr_num=$(echo "$prs_json" | jq -r ".[$idx].number")
               echo "Skipping PR #${pr_num} (head from fork: ${head_repo})"
@@ -76,17 +76,14 @@ jobs:
             pr_num=$(echo "$prs_json" | jq -r ".[$idx].number")
             head_ref=$(echo "$prs_json" | jq -r ".[$idx].head.ref")
 
-            # Get merge base (commit where branch diverged from main) via Compare API on upstream
-            compare=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            compare=$(curl -s -H "Accept: application/vnd.github.v3+json" \
               "https://api.github.com/repos/${UPSTREAM_REPO}/compare/${base_ref}...${head_sha}")
-
             merge_base_sha=$(echo "$compare" | jq -r '.merge_base_commit.sha // empty')
             if [[ -z "$merge_base_sha" ]] || [[ "$merge_base_sha" == "null" ]]; then
               echo "Skipping PR #${pr_num}: could not get merge base"
               continue
             fi
 
-            # Only include PRs that touch at least one Python file
             files=$(echo "$compare" | jq -r '.files[]?.filename // empty')
             has_py=false
             if [[ -n "$files" ]]; then
@@ -117,7 +114,6 @@ jobs:
 
       # --------------------------------------------------------------------
       # STEP 2 — FETCH PR HEADS FROM UPSTREAM INTO CURRENT REPO
-      # (So run-analysis can checkout those commits in this repo)
       # --------------------------------------------------------------------
       - name: Fetch upstream PR refs and push into current repo
         if: steps.fetch-prs.outputs.pr_count != '0'
@@ -164,14 +160,12 @@ jobs:
           MAX_CONCURRENT=${{ env.MAX_CONCURRENT }}
           RUNNER_DISPATCH_TIMEOUT=${{ env.RUNNER_DISPATCH_TIMEOUT }}
 
-          # Collect PRs that need analysis (artifact not already present)
           declare -a heads_to_process=()
           declare -a artifacts_to_process=()
           mapfile -t head_shas < <(jq -r '.[].head_sha' prs_to_analyze.json)
 
           for head_sha in "${head_shas[@]}"; do
             artifact="continuous-analysis-results-${repo_name}-${head_sha}"
-
             artifact_exists=false
             page=1
             per_page=100
