@@ -2,7 +2,7 @@ name: Monitor Upstream and Run Analysis
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 18 * * *"
   workflow_dispatch:
     inputs:
       number_of_commits:
@@ -31,7 +31,7 @@ jobs:
       BRANCH: "main"
       RUNNER_DISPATCH_TIMEOUT: 7200 # 2 hours
       FILTER_DISPATCH_TIMEOUT: 1800 # 30 minutes
-      MAX_CONCURRENT: 1
+      MAX_CONCURRENT: 2
 
     steps:
       # --------------------------------------------------------------------
