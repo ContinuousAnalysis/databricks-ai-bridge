@@ -78,14 +78,14 @@ jobs:
           for idx in $(seq 0 $((pr_count - 1))); do
             head_repo=$(echo "$prs_json" | jq -r ".[$idx].head.repo.full_name")
 
-            # Check if the PR is from the upstream repository
-            if [[ "$head_repo" != "$UPSTREAM_REPO" ]]; then
+            # # Check if the PR is from the upstream repository
+            # if [[ "$head_repo" != "$UPSTREAM_REPO" ]]; then
 
-              # If the PR is not from the upstream repository, skip it
-              pr_num=$(echo "$prs_json" | jq -r ".[$idx].number")
-              echo "Skipping PR #${pr_num} (head from fork: ${head_repo})"
-              continue
-            fi
+            #   # If the PR is not from the upstream repository, skip it
+            #   pr_num=$(echo "$prs_json" | jq -r ".[$idx].number")
+            #   echo "Skipping PR #${pr_num} (head from fork: ${head_repo})"
+            #   continue
+            # fi
 
             # Get the head SHA and PR number
             head_sha=$(echo "$prs_json" | jq -r ".[$idx].head.sha")
