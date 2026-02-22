@@ -2,7 +2,7 @@ name: Monitor Open PRs and Run Analysis
 
 on:
   schedule:
-    - cron: "30 */6 * * *"
+    - cron: "0 6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -16,7 +16,7 @@ env:
   BRANCH: "main"
   RUNNER_DISPATCH_TIMEOUT: 7200 # 2 hours
   FILTER_DISPATCH_TIMEOUT: 1800 # 30 minutes
-  MAX_CONCURRENT: 12
+  MAX_CONCURRENT: 2
 
 jobs:
   monitor-open-prs:
