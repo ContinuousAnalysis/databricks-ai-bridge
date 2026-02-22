@@ -27,7 +27,7 @@ jobs:
       UPSTREAM_REPO: "databricks/databricks-ai-bridge"
       BRANCH: "main"
       RUNNER_DISPATCH_TIMEOUT: 7200 # 2 hours
-      MAX_CONCURRENT: 9
+      MAX_CONCURRENT: 2
 
     steps:
       # --------------------------------------------------------------------
