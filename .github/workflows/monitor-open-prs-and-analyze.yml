@@ -16,7 +16,7 @@ env:
   BRANCH: "main"
   RUNNER_DISPATCH_TIMEOUT: 7200 # 2 hours
   FILTER_DISPATCH_TIMEOUT: 1800 # 30 minutes
-  MAX_CONCURRENT: 2
+  MAX_CONCURRENT: 12
 
 jobs:
   monitor-open-prs:
