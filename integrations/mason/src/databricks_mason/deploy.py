@@ -25,7 +25,9 @@ from databricks_mason.render import field
 from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV
 
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
+_MEMORY_ACTOR_ENV = "AGENT_MEMORY_ACTOR_ID"
 _SESSION_ENV = "AGENT_SESSION_STORE"
+_SESSION_ACTOR_ENV = "AGENT_SESSION_ACTOR_ID"
 
 
 # --- databricks CLI plumbing (the deployment runtime) -----------------------
@@ -127,6 +129,12 @@ def _ensure_session_store(client, name: str) -> dict:
     help="Session store name to wire in via AGENT_SESSION_STORE.",
 )
 @click.option(
+    "--actor-id",
+    default="agent",
+    show_default=True,
+    help="Actor id used for managed memory entries and sessions.",
+)
+@click.option(
     "--with-traces",
     "traces_destination",
     default=None,
@@ -155,6 +163,7 @@ def deploy(
     source,
     memory_store,
     session_store,
+    actor_id,
     traces_destination,
     traces_experiment,
     create_stores,
@@ -174,11 +183,15 @@ def deploy(
             else client.get_memory_store(memory_store)
         )
         env_updates[_MEMORY_ENV] = field(store, "name") or memory_store
+        env_updates[_MEMORY_ACTOR_ENV] = actor_id
         provisioned["Memory store"] = env_updates[_MEMORY_ENV]
     if session_store:
         if create_stores:
             _ensure_session_store(client, session_store)
+        else:
+            client.get_session_store(session_store)
         env_updates[_SESSION_ENV] = session_store
+        env_updates[_SESSION_ACTOR_ENV] = actor_id
         provisioned["Session store"] = session_store
     if traces_destination:
         env_updates[TRACES_DEST_ENV] = traces_destination
