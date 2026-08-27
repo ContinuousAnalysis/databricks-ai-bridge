@@ -50,6 +50,8 @@ Use `--output json` for scripting.
 mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
+  add
+    ui         [--enable-crash] [directory]
   memory
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete
@@ -63,3 +65,31 @@ mason [-p <profile>] [-o text|json]
                [--with-session-store N] [--with-traces C.S] [--create-stores]
   deployments  list | get | logs | start | stop | delete
 ```
+
+## Add the demo UI
+
+From a LangGraph scratch agent project, add the zero-build browser client:
+
+```sh
+cd ./my-agent
+mason add ui
+uv run start-server
+```
+
+The UI exercises streaming, background polling, session routing, long-term memory tools, human
+approval, and runtime status. `mason add ui --enable-crash` also enables a demo-only endpoint that
+terminates the process so an auto-restarting dev server or deployed Databricks App can prove that a
+managed Session Store resumes the same conversation after restart.
+
+For the full deployed demo, connect both managed stores:
+
+```sh
+mason add ui --enable-crash
+mason --profile <profile> deploy mason-agent-demo --source . \
+  --with-session-store mason-demo-sessions \
+  --with-memory-store mason-demo-memory \
+  --create-stores
+```
+
+The UI can remember a fact in one session and recall it in a new one. It can also pause on the
+sample approval-gated tool, crash the app, wait for a new process, and approve the same paused run.
