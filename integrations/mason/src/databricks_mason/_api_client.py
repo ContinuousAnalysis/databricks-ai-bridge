@@ -13,7 +13,7 @@ from databricks.sdk import WorkspaceClient
 
 from databricks_mason.errors import AgentCliError, wrap_api_error
 
-_BASE = "/api/2.0/agents"
+_BASE = "/api/agents/v1"
 
 
 def _query(**kwargs: Any) -> dict[str, Any]:

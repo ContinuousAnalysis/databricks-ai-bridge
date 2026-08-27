@@ -27,7 +27,7 @@ def _truncate(value: Any, length: int = 60) -> str:
 
 @click.group()
 def memory() -> None:
-    """Manage agent memory stores and entries (/api/2.0/agents/memory-stores)."""
+    """Manage agent memory stores and entries (/api/agents/v1/memory-stores)."""
 
 
 @memory.group()
@@ -51,7 +51,7 @@ def _store_starter_code(obj, store: dict) -> list[tuple[str, str, str]]:
             "curl",
             "bash",
             f"""
-curl -X POST "{obj.client().host}/api/2.0/agents/{name}/entries" \\
+curl -X POST "{obj.client().host}/api/agents/v1/{name}/entries" \\
   -H "Authorization: Bearer $DATABRICKS_TOKEN" -H "Content-Type: application/json" \\
   -d '{{"actor_id": "alice", "path": "/preferences/style.md", "content": "Terse, code first."}}'
 """,
