@@ -131,6 +131,47 @@ def test_builtin_submission_route_maps_generic_payload():
     )
 
 
+def test_background_stream_submits_once_and_returns_run_id():
+    durable_app = DatabricksDurableApp(durability_store=AsyncMock())
+
+    @durable_app.entrypoint
+    async def agent(payload, context):
+        return payload
+
+    completed = DurableExecution(
+        execution_id="run-1",
+        status=DurableExecutionStatus.COMPLETED,
+        attempt=1,
+        heartbeat_at=None,
+        request={"session_id": "session-1", "payload": {"message": "hello"}},
+        response={"message": "hello"},
+    )
+    submit = AsyncMock(return_value=completed)
+
+    with (
+        patch.object(durable_app.runtime, "start", new_callable=AsyncMock),
+        patch.object(durable_app.runtime, "stop", new_callable=AsyncMock),
+        patch.object(durable_app.runtime, "submit", submit),
+        patch.object(durable_app.runtime, "events", new=AsyncMock(return_value=[])),
+        patch.object(durable_app.runtime, "get", new=AsyncMock(return_value=completed)),
+        TestClient(durable_app) as client,
+    ):
+        response = client.post(
+            "/runs",
+            json={
+                "run_id": "run-1",
+                "session_id": "session-1",
+                "payload": {"message": "hello"},
+                "background": True,
+                "stream": True,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["Databricks-Run-Id"] == "run-1"
+    submit.assert_awaited_once()
+
+
 def test_only_one_entrypoint_can_be_registered():
     durable_app = DatabricksDurableApp(durability_store=AsyncMock())
 
