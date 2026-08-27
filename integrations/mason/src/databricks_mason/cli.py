@@ -10,8 +10,8 @@ from typing import Optional
 
 import click
 
+from databricks_mason._api_client import AgentApiClient
 from databricks_mason.auth import load_default_profile, login, logout
-from databricks_mason.client import AgentApiClient
 from databricks_mason.deploy import deploy, deployments
 from databricks_mason.memory import memory
 from databricks_mason.sessions import sessions
@@ -48,7 +48,7 @@ class CliContext:
 def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
     """Mason: deploy agents and manage their memory and sessions.
 
-    Targets the agents/v1 preview APIs served on a workspace; auth comes from a
+    Targets the 2.0/agents preview APIs served on a workspace; auth comes from a
     .databrickscfg profile (pass --profile / -p, run `mason login` to save a default,
     or rely on the SDK's default resolution).
     """

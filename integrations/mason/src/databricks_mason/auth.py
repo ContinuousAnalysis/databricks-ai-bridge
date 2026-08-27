@@ -17,7 +17,7 @@ from typing import Optional
 import click
 
 from databricks_mason import render
-from databricks_mason.client import AgentApiClient
+from databricks_mason._api_client import AgentApiClient
 from databricks_mason.errors import AgentCliError
 
 
