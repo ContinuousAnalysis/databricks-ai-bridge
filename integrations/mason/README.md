@@ -44,6 +44,50 @@ underlying credentials. If Databricks SDK default authentication is already conf
 you can skip `mason login`. You can also pass `--profile/-p` for an individual command.
 Use `--output json` for scripting.
 
+## Python SDK
+
+Besides the CLI, Mason ships a typed, importable SDK for the same memory and session
+APIs. It wraps the CLI's `AgentApiClient` (so it shares profile-based auth), returns typed
+handles instead of raw dicts, auto-consumes pagination, and adds convenience lookups.
+
+```python
+from databricks_mason import DatabricksAgentClient
+
+client = DatabricksAgentClient(profile="my-profile")  # or default SDK auth
+
+# Memory: bound store handles, get-or-create, and read-modify-write append
+store = client.memory_store.get(
+    display_name="coding_agent_memory",
+    create_if_not_exists=True,
+    description="Long-term coding-agent memory",
+)
+store.add(
+    actor_id="alice",
+    session_id="project-sess-1",
+    path="/memories/preferences.md",
+    content="The user prefers concise answers.",
+)
+hits = store.search(actor_id="alice", query="response preferences")
+
+# Sessions: bound stores/sessions and durable transcript items
+sstore = client.session_store.create(session_store_name="support-agent-sessions")
+session = sstore.create_session(actor_id="customer-123", session_id="case-456")
+session.append(
+    [
+        {"type": "message", "role": "user", "content": "I need help with my cluster."},
+        {"type": "message", "role": "assistant", "content": "Let's take a look."},
+    ]
+)
+page = session.list_items(page_size=100, order_by="create_time asc")
+```
+
+`memory_store.list(...)`, `session_store.list()`, and `store.list_sessions()` consume all
+server pages; `list_sessions()` defaults to `order_by="create_time desc"` for exactly-once
+enumeration. `session.list_items()` returns one `SessionItemPage`; pass its `next_page_token`
+for the next page. Every list/search `page_size` must be between 1 and 100. `session.fork(...)`
+creates an independent copy, optionally through a specific item; deleting a session cascades to
+its descendants.
+
 ## Commands
 
 ```text
