@@ -15,6 +15,77 @@ The app owns background execution, heartbeat recovery, final-result storage,
 and cursor-based SSE replay. The agent owns its `AsyncDatabricksSession`, maps
 JSON into the OpenAI SDK, and emits SDK events through `context.emit()`.
 
+## Background, streaming, and client impact
+
+| Capability | Developer contract | Client contract |
+| --- | --- | --- |
+| Background | Return the final JSON result. The app starts the task and stores its status and result. | With `background=true, stream=false`, `POST /runs` returns `202`; poll `GET /runs/{run_id}`. |
+| Durable streaming | Convert SDK events to JSON and call `await context.emit(event)`. | With `stream=true`, the POST is SSE. Save each SSE `id`, reconnect through `GET /runs/{run_id}/events?after=<id>`, and poll the run for the authoritative result. |
+
+`background=true, stream=true` starts one durable run and immediately opens its
+event stream. Disconnecting the client does not cancel the run.
+
+### OpenAI Agents SDK: before and after
+
+The OpenAI Agents SDK is an in-process library; it does not define a remote
+deployment client. Before this app, the developer implemented both the server
+protocol and its client around `Runner.run_streamed()`:
+
+```python
+result = Runner.run_streamed(agent, input=message, session=session)
+async for sdk_event in result.stream_events():
+    await send_using_my_server_protocol(sdk_event)
+
+async with http.stream("POST", "/my-agent", json={"message": "hello"}): ...
+```
+
+With the durable app, the agent loop stays the same, but the client adopts the
+standard run envelope and runtime routes:
+
+```python
+async with http.stream(
+    "POST",
+    "/runs",
+    json={
+        "run_id": "run-1",
+        "session_id": "conversation-1",
+        "background": True,
+        "stream": True,
+        "payload": {"message": "hello"},
+    },
+) as response:
+    async for line in response.aiter_lines():
+        last_event_id = remember_sse_id(line, last_event_id)
+
+final = (await http.get("/runs/run-1")).json()
+```
+
+### LangGraph SDK: before and after
+
+A native LangGraph deployment already has a framework-specific remote client:
+
+```python
+thread = await langgraph.threads.create()
+run = await langgraph.runs.create(
+    thread["thread_id"], "agent", input={"messages": messages}
+)
+result = await langgraph.runs.join(thread["thread_id"], run["run_id"])
+
+async for event in langgraph.runs.stream(
+    thread["thread_id"], "agent", input={"messages": messages}
+):
+    consume(event)
+```
+
+Behind this generic app, `langgraph_sdk` is not wire-compatible. The client uses
+the same `/runs` call shown above, normally passing `thread_id` as `session_id`;
+the developer maps `payload` to graph input inside `@app.entrypoint`. A native
+LangGraph client would require a separate protocol adapter.
+
+References: [OpenAI Agents SDK streaming](https://openai.github.io/openai-agents-python/streaming/),
+[LangGraph background runs](https://docs.langchain.com/langsmith/runs), and
+[LangGraph resumable streaming](https://docs.langchain.com/langsmith/streaming).
+
 ## Durable HITL flow
 
 HITL is modeled as two durable runs. The runtime does not keep a worker alive
