@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 from importlib import resources
+from importlib.metadata import PackageNotFoundError, version as _installed_version
 from typing import Optional
 
 import click
@@ -28,6 +29,11 @@ from databricks_mason.project_config import write_project_metadata
 # Each framework's template has its own home: the git repo, ref, and path-within-repo to fetch.
 # (The two basic templates currently live in different repos; this keeps each pointed at its own.)
 # `--repo` / `--ref` override the repo/ref here, e.g. to pull from a fork or branch before merge.
+#
+# `versioned` templates live in this repo and are released in lockstep with the CLI: a scaffold
+# they produce pins `databricks-mason[runtime]` at this package's version, so init fetches the
+# template tagged for the installed CLI (see `_template_ref`) rather than `main`. That keeps a
+# user's scaffold from outrunning the `databricks-mason` they have installed.
 _TEMPLATES = {
     "openai": {
         "repo": "https://github.com/databricks/app-templates.git",
@@ -38,12 +44,35 @@ _TEMPLATES = {
         "repo": "https://github.com/databricks/databricks-ai-bridge.git",
         "ref": "main",
         "path": "integrations/mason/templates/agent-langgraph",
+        "versioned": True,
     },
 }
+
+# The release workflow tags each published version `databricks-mason-v<version>`.
+_RELEASE_TAG_PREFIX = "databricks-mason-v"
 
 _CHAT_APP_TEMPLATES = {
     "langgraph": "integrations/mason/templates/ui/agent-langgraph",
 }
+
+
+def _template_ref(spec: dict) -> str:
+    """The git ref to fetch a framework's template from, absent a `--ref` override.
+
+    For a `versioned` template, fetch the tag matching the installed CLI so the scaffold's pinned
+    `databricks-mason` matches what the user has. Fall back to the spec's default ref when the
+    version isn't a published release — an editable/dev build (e.g. `0.1.0.dev0`, or a local `+`
+    local-version install) has no corresponding tag, so those keep fetching `main`.
+    """
+    if not spec.get("versioned"):
+        return spec["ref"]
+    try:
+        installed = _installed_version("databricks-mason")
+    except PackageNotFoundError:
+        return spec["ref"]
+    if "dev" in installed or "+" in installed:
+        return spec["ref"]
+    return f"{_RELEASE_TAG_PREFIX}{installed}"
 
 
 def _runtime_template(name: str) -> str:
@@ -206,7 +235,7 @@ def init(
     overlay_dirs = (_CHAT_APP_TEMPLATES[framework],) if enable_chat_app else ()
     _fetch_template(
         repo or spec["repo"],
-        ref or spec["ref"],
+        ref or _template_ref(spec),
         template_path,
         dest,
         overlay_dirs,
