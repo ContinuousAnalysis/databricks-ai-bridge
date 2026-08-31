@@ -15,6 +15,7 @@ from typing import Optional
 import click
 import yaml
 
+from databricks_mason.agent_project import AgentProject
 from databricks_mason.deploy import _upsert_manifest_env, resolve_store_env
 from databricks_mason.errors import AgentCliError
 from databricks_mason.store_access import _databricks
@@ -99,6 +100,8 @@ def dev(
             f"No app.yaml in '{source_dir}'.",
             hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
         )
+    if (source_dir / "agent.toml").is_file():
+        AgentProject.load(source_dir)
 
     # Wire any requested stores/traces into app.yaml first, so run-local reads the updated env.
     if memory_store or session_store or traces_destination or traces_experiment:

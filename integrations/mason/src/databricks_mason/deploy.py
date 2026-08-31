@@ -20,6 +20,7 @@ import click
 import yaml
 
 from databricks_mason import memory_store_access, render, session_store_access, timefmt
+from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
@@ -329,6 +330,9 @@ def deploy(
 ) -> None:
     """Deploy an agent: provision its stores, wire them in, and roll out the deployment."""
     source_dir = pathlib.Path(source)
+    agent_project = None
+    if (source_dir / "agent.toml").is_file():
+        agent_project = AgentProject.load(source_dir)
     client = obj.client()
 
     # 1. Provision / resolve stores and build the env to inject.
@@ -370,7 +374,12 @@ def deploy(
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own
     # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
-    _databricks(["sync", str(source_dir), ws_path, "--exclude", "uv.lock"], obj.profile)
+    sync_args = ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"]
+    if agent_project is not None:
+        for skill in agent_project.skills:
+            if skill.source.path is not None:
+                sync_args.extend(["--include", skill.source.path])
+    _databricks(sync_args, obj.profile)
     _databricks(["apps", "deploy", name, "--source-code-path", ws_path], obj.profile)
 
     # 4. Give the app's SP access to its stores (best-effort, two steps): bind each store's database

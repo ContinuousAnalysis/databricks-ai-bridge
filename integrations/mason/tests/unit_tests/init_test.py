@@ -9,6 +9,8 @@ from __future__ import annotations
 import ast
 import json
 import pathlib
+import subprocess
+import sys
 from unittest import mock
 
 import tomli
@@ -106,7 +108,7 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
     }
 
 
-def test_init_installs_static_manifest_runtime_without_editing_langgraph_agent_code(
+def test_init_installs_static_skill_runtimes_without_editing_langgraph_agent_code(
     tmp_path: pathlib.Path,
 ):
     dest = tmp_path / "langgraph"
@@ -126,9 +128,71 @@ def test_init_installs_static_manifest_runtime_without_editing_langgraph_agent_c
     assert result.exit_code == 0, result.output
     assert (dest / "agent" / "agent.py").read_text() == "USER_AGENT = True\n"
     ast.parse((dest / "agent" / "mason" / "tool_manifest.py").read_text())
+    ast.parse((dest / "agent" / "mason" / "skill_manifest.py").read_text())
+    skill_runtime = (dest / "agent" / "mason" / "skill_runtime.py").read_text()
+    ast.parse(skill_runtime)
+    assert 'load_skills(expected_framework="langgraph")' in skill_runtime
     runtime = (dest / "agent" / "mason" / "mcp_runtime.py").read_text()
     ast.parse(runtime)
     assert 'load_tools(expected_framework="langgraph")' in runtime
+
+
+def test_installed_skill_manifest_runs_without_databricks_mason(
+    tmp_path: pathlib.Path,
+):
+    dest = tmp_path / "langgraph"
+
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
+        (target / "agent" / "mason").mkdir(parents=True)
+        (target / "agent" / "__init__.py").write_text("", encoding="utf-8")
+        (target / "agent" / "mason" / "__init__.py").write_text("", encoding="utf-8")
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    (dest / "agent.toml").write_text(
+        """schema_version = 1
+
+[agent]
+framework = "langgraph"
+
+[[skills]]
+id = "project-review"
+source = { kind = "local", path = ".claude/skills/project-review" }
+""",
+        encoding="utf-8",
+    )
+    script = """
+import importlib.abc
+import sys
+
+class BlockMason(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "databricks_mason" or fullname.startswith("databricks_mason."):
+            raise ModuleNotFoundError(fullname)
+        return None
+
+sys.meta_path.insert(0, BlockMason())
+sys.path.insert(0, sys.argv[1])
+from agent.mason.skill_manifest import SkillRecord, load_skills
+
+assert load_skills("langgraph") == (
+    SkillRecord("project-review", "local", ".claude/skills/project-review"),
+)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", script, str(dest)],
+        cwd=dest,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_init_openai_records_manifest_without_installing_runtime_adapter(tmp_path: pathlib.Path):

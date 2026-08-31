@@ -55,6 +55,10 @@ def test_list_mcp_services_query(workspace_client):
     )
 
 
+def test_client_has_no_uc_skills_api():
+    assert not hasattr(MasonClient, "list_uc_skills")
+
+
 @mock.patch("databricks_mason.client.WorkspaceClient")
 def test_get_memory_store_normalizes_id(workspace_client):
     c, do = _client(workspace_client)

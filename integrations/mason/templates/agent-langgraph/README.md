@@ -32,6 +32,8 @@ agent/                 # the agent (reasoning plane) — this is what you edit
     memory.py          #     remember / recall — memory_tools() returns them when AGENT_MEMORY_STORE is set
     tracing.py         #     MLflow tracing setup (on only when a destination + an experiment are set)
     mcp_runtime.py     #     loads tools from the servers in mcps.build_mcp_servers()
+    skill_manifest.py  #     validates exact [[skills]] declarations from agent.toml
+    skill_runtime.py   #     metadata-first registry + lazy load_skill/read_skill_file tools
     background.py      #     BackgroundRuns: in-memory store for background runs; swap for a durable one
     durability.py      #     attempt, heartbeat, and ownership event log for the stop/start demo
     recovery.py        #     checkpointed tool sequence that resumes after a process restart
@@ -50,6 +52,45 @@ SDK-agnostic HTTP surface — it wires two generic handlers (`invoke_handler`/`s
 endpoints, so the agent SDK lives entirely behind them in `agent/agent.py`. `tools/` is a drop-in
 package: add a `*.py` with a `@tool` function and it's auto-collected (no edits to existing code).
 `mcps.py` exposes `build_mcp_servers()` (empty by default — add servers to offer them).
+
+## Add agent skills
+
+From this project directory, attach a project-local Agent Skills directory, inspect configured
+skills, and run or deploy without generating agent source:
+
+```bash
+mason skills add custom .claude/skills/project-review --source .
+mason skills list --source .
+mason dev --source .
+mason deploy my-agent --source .
+```
+
+Mason records the bindings in `agent.toml`:
+
+```toml
+[[skills]]
+id = "project-review"
+source = { kind = "local", path = ".claude/skills/project-review" }
+```
+
+On each graph construction, `agent/mason/skill_runtime.py` reads the declarations and adds only
+their IDs, sources, and descriptions to the system prompt. Full instructions and reference files
+remain lazy behind `load_skill(skill_id)` and `read_skill_file(skill_id, path)`. Startup reads only
+bounded YAML frontmatter from `SKILL.md`, not its body. `load_skill` returns the instruction body
+without frontmatter, and prompt metadata retains declaration order.
+
+The manifest allows at most 60 unique skill IDs. Skill bodies, reference files, and local YAML
+frontmatter are limited to 1 MiB and loaded content must be UTF-8. Local source paths must resolve
+inside the project; reference paths must resolve inside their declared skill. Absolute paths,
+Windows drives, empty/`.`/`..` segments, and symlink escapes fail closed.
+
+This is a LangGraph-only instruction and file-loading feature. It does not author or publish skills,
+use remote registries, auto-attach discovered skills, eagerly place bodies in prompts, expose
+arbitrary files, execute skill scripts, or turn each skill into a model tool. OpenAI templates do
+not install this runtime, and
+`mason skills add` rejects OpenAI projects in this release. Mason also rejects nonempty OpenAI
+`[[skills]]` declarations during manifest load, before local run or deployment; OpenAI projects
+without skills remain valid.
 
 ## Run locally
 

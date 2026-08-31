@@ -21,6 +21,8 @@ _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
 _TOOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_MAX_SKILLS = 60
+_LANGGRAPH_SKILLS_ONLY = "Agent skills are LangGraph-only in this release."
 
 
 def _three_part_name(value: str, description: str) -> str:
@@ -33,6 +35,22 @@ def _three_part_name(value: str, description: str) -> str:
         raise AgentCliError(
             f"Invalid {description} {value!r}.",
             hint=f"Use a three-part name: catalog.schema.{description.replace(' ', '_')}.",
+        )
+    return value
+
+
+def _project_relative_path(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or pathlib.PurePosixPath(value).is_absolute()
+        or pathlib.PureWindowsPath(value).is_absolute()
+        or bool(pathlib.PureWindowsPath(value).drive)
+        or any(segment in {"", ".", ".."} for segment in re.split(r"[/\\]", value))
+    ):
+        raise AgentCliError(
+            f"Invalid local skill path {value!r}.",
+            hint="Use a project-relative path without empty, '.', or '..' segments.",
         )
     return value
 
@@ -185,6 +203,35 @@ class ToolSpec:
         )
 
 
+@dataclass(frozen=True)
+class SkillSource:
+    """Discriminated source for one skill binding."""
+
+    kind: str
+    path: str | None = None
+
+
+@dataclass(frozen=True)
+class SkillSpec:
+    """One framework-neutral skill binding from ``agent.toml``."""
+
+    id: str
+    source: SkillSource
+
+    def __post_init__(self) -> None:
+        if not _TOOL_ID.fullmatch(self.id):
+            raise AgentCliError(f"Invalid skill id {self.id!r}.")
+        if self.source.kind != "local":
+            raise AgentCliError(f"Unsupported skill source kind {self.source.kind!r}.")
+        if self.source.path is None:
+            raise AgentCliError("Local skills require a path.")
+        _project_relative_path(self.source.path)
+
+    @classmethod
+    def local(cls, skill_id: str, *, path: str) -> "SkillSpec":
+        return cls(skill_id, SkillSource(kind="local", path=_project_relative_path(path)))
+
+
 def _required_string(value: object, description: str) -> str:
     if not isinstance(value, str) or not value:
         raise AgentCliError(f"Tool manifest must declare {description}.")
@@ -238,6 +285,33 @@ def _tool_from_manifest(value: object) -> ToolSpec:
     )
 
 
+def _skill_from_manifest(value: object) -> SkillSpec:
+    if not isinstance(value, Mapping):
+        raise AgentCliError("Each agent.toml skill must be a TOML table.")
+    value = cast(Mapping[str, Any], value)
+    skill_id = value.get("id")
+    if not isinstance(skill_id, str) or not skill_id:
+        raise AgentCliError("Skill manifest must declare an id.")
+    source = value.get("source")
+    if not isinstance(source, Mapping):
+        raise AgentCliError("Each agent.toml skill must declare a source table.")
+    source = cast(Mapping[str, Any], source)
+    kind = source.get("kind")
+    if not isinstance(kind, str) or not kind:
+        raise AgentCliError("Skill source must declare a kind.")
+    if kind != "local":
+        raise AgentCliError(f"Unsupported skill source kind {kind!r}.")
+    if "name" in source:
+        raise AgentCliError("Local skills do not accept a source name.")
+    path = source.get("path")
+    if path is not None and not isinstance(path, str):
+        raise AgentCliError("Skill source path must be a string.")
+    return SkillSpec(
+        id=skill_id,
+        source=SkillSource(kind=kind, path=path),
+    )
+
+
 def _inline_table(values: Mapping[str, str]) -> Any:
     table = tomlkit.inline_table()
     for key, value in values.items():
@@ -266,6 +340,16 @@ def _tool_table(spec: ToolSpec) -> Any:
     return table
 
 
+def _skill_table(spec: SkillSpec) -> Any:
+    table = tomlkit.table()
+    table.add("id", spec.id)
+    source_values = {"kind": spec.source.kind}
+    if spec.source.path is not None:
+        source_values["path"] = spec.source.path
+    table.add("source", _inline_table(source_values))
+    return table
+
+
 class AgentProject:
     """Loaded mutable view of a project's canonical tool manifest."""
 
@@ -275,12 +359,14 @@ class AgentProject:
         document: TOMLDocument,
         framework: str,
         tools: list[ToolSpec],
+        skills: list[SkillSpec],
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
         self._document = document
         self.framework = framework
         self.tools = tools
+        self.skills = skills
 
     @classmethod
     def load(cls, root: pathlib.Path | str) -> "AgentProject":
@@ -313,7 +399,18 @@ class AgentProject:
         ids = [tool.id for tool in tools]
         if len(ids) != len(set(ids)):
             raise AgentCliError("agent.toml tool ids must be unique.")
-        return cls(project_root, document, framework, tools)
+        raw_skills = document.get("skills", [])
+        if not isinstance(raw_skills, list):
+            raise AgentCliError("agent.toml skills must be an array of tables.")
+        if raw_skills and framework != "langgraph":
+            raise AgentCliError(_LANGGRAPH_SKILLS_ONLY)
+        if len(raw_skills) > _MAX_SKILLS:
+            raise AgentCliError(f"agent.toml may declare at most {_MAX_SKILLS} skills.")
+        skills = [_skill_from_manifest(item) for item in raw_skills]
+        skill_ids = [skill.id for skill in skills]
+        if len(skill_ids) != len(set(skill_ids)):
+            raise AgentCliError("agent.toml skill ids must be unique.")
+        return cls(project_root, document, framework, tools, skills)
 
     @classmethod
     def create(cls, root: pathlib.Path | str, *, framework: str) -> "AgentProject":
@@ -326,7 +423,7 @@ class AgentProject:
         agent = tomlkit.table()
         agent.add("framework", framework)
         document.add("agent", agent)
-        return cls(project_root, document, framework, [])
+        return cls(project_root, document, framework, [], [])
 
     def add_tool(self, spec: ToolSpec) -> bool:
         for existing in self.tools:
@@ -354,6 +451,29 @@ class AgentProject:
             raise AgentCliError("agent.toml tools must be an array of tables.")
         del raw_tools[index]
         del self.tools[index]
+        return True
+
+    def add_skill(self, spec: SkillSpec) -> bool:
+        if self.framework != "langgraph":
+            raise AgentCliError(_LANGGRAPH_SKILLS_ONLY)
+        for existing in self.skills:
+            if existing.id != spec.id:
+                continue
+            if existing == spec:
+                return False
+            raise AgentCliError(
+                f"Skill id {spec.id!r} already exists with different configuration."
+            )
+        if len(self.skills) >= _MAX_SKILLS:
+            raise AgentCliError(f"agent.toml may declare at most {_MAX_SKILLS} skills.")
+        raw_skills = self._document.get("skills")
+        if raw_skills is None:
+            raw_skills = tomlkit.aot()
+            self._document.append("skills", raw_skills)
+        elif not hasattr(raw_skills, "append"):
+            raise AgentCliError("agent.toml skills must be an array of tables.")
+        raw_skills.append(_skill_table(spec))
+        self.skills.append(spec)
         return True
 
     def write(self) -> pathlib.Path:

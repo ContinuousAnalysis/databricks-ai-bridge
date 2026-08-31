@@ -135,6 +135,74 @@ def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path
     assert "agent.toml" not in excluded
 
 
+def test_deploy_sync_explicitly_includes_declared_skill_directories(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / "agent.toml").write_text(
+        """schema_version = 1
+
+[agent]
+framework = "langgraph"
+
+[[skills]]
+id = "project-review"
+source = { kind = "local", path = ".claude/skills/project-review" }
+"""
+    )
+    calls: list[list[str]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: calls.append(args)
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    sync = next(args for args in calls if args[0] == "sync")
+    assert sync[-4:] == [
+        "--exclude",
+        "uv.lock",
+        "--include",
+        ".claude/skills/project-review",
+    ]
+
+
+def test_deploy_rejects_openai_manifest_with_skills_before_remote_mutation(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / "agent.toml").write_text(
+        """schema_version = 1
+
+[agent]
+framework = "openai"
+
+[[skills]]
+id = "review"
+source = { kind = "local", path = "skills/review" }
+"""
+    )
+    databricks = mock.Mock()
+    monkeypatch.setattr(deploy_mod, "_databricks", databricks)
+    ctx = mock.Mock(profile="prof", output="text")
+    ctx.client.side_effect = AssertionError("validation must happen before client creation")
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=ctx)
+
+    assert result.exit_code == 1
+    assert "Agent skills are LangGraph-only" in result.output
+    ctx.client.assert_not_called()
+    databricks.assert_not_called()
+
+
 def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path, monkeypatch):
     # A brand-new app isn't RUNNING right after `apps create`; deploy must wait, or it races and
     # fails ("not in RUNNING state"). Verify create -> wait -> sync/deploy ordering.

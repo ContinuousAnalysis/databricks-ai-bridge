@@ -158,11 +158,35 @@ def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
 ):
     (tmp_path / "app.yaml").write_text("command: []\n")
     manifest = tmp_path / "agent.toml"
-    manifest.write_text('schema_version = 1\n\n[agent]\nframework = "langgraph"\n')
+    manifest.write_text('schema_version = 1\n\n[agent]\nframework = "openai"\n')
 
     with mock.patch.object(dev_mod, "_databricks") as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
     assert result.exit_code == 0, result.output
     assert db.call_args.kwargs["cwd"] == str(tmp_path)
-    assert manifest.read_text() == 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
+    assert manifest.read_text() == 'schema_version = 1\n\n[agent]\nframework = "openai"\n'
+
+
+def test_dev_rejects_openai_manifest_with_skills_before_server_execution(
+    tmp_path: pathlib.Path,
+):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "agent.toml").write_text(
+        """schema_version = 1
+
+[agent]
+framework = "openai"
+
+[[skills]]
+id = "review"
+source = { kind = "local", path = "skills/review" }
+"""
+    )
+
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 1
+    assert "Agent skills are LangGraph-only" in result.output
+    db.assert_not_called()

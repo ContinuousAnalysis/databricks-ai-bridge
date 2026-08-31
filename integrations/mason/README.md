@@ -88,6 +88,10 @@ mason [-p <profile>] [-o text|json]
     list | get | instrument
   mcp
     list             [--schema CATALOG.SCHEMA]
+  skills
+    list             --schema CATALOG.SCHEMA
+    add uc           CATALOG.SCHEMA.SKILL [--name ID] [--source PATH]
+    add custom       PATH [--source PATH]
   init          [--framework openai|langgraph] [--profile P] [DIRECTORY]
   tools
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
@@ -95,6 +99,7 @@ mason [-p <profile>] [-o text|json]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
     add python       NAME [--source PATH]
     list             [--source PATH]
+  dev          [--source PATH]
   deploy       <name> --source PATH [--with-memory-store N]
                [--with-session-store N] [--actor-id ID]
                [--with-traces C.S] [--create-stores]
@@ -138,6 +143,63 @@ Sandbox scopes default to read-only access. Repeat `--scope` to allow more than 
 `volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the
 agent needs writes. Every sandbox call carries this fixed downscope in MCP `_meta`, outside the tool
 arguments controlled by the model.
+
+## Agent skills
+
+Agent skills are supported by the LangGraph template in this release. Attach a project-local skill
+to `agent.toml`, inspect the configured skills, then run and deploy the same source tree:
+
+```bash
+mason skills add custom .claude/skills/project-review --source .
+mason skills list --source .
+mason dev --source .
+mason deploy my-agent --source .
+```
+
+`skills add custom` accepts a directory inside the project. That directory must contain a UTF-8
+`SKILL.md` with YAML frontmatter whose nonblank `description` is paired with a lowercase,
+hyphenated `name` matching the directory name. The command uses that name as the manifest ID,
+defaults `--source` to the current directory, and is idempotent for an identical binding. `skills
+list` validates and displays the local skills already declared in the project.
+
+The resulting schema is an ordered array of exact bindings:
+
+```toml
+schema_version = 1
+
+[agent]
+framework = "langgraph"
+
+[[skills]]
+id = "project-review"
+source = { kind = "local", path = ".claude/skills/project-review" }
+```
+
+At graph creation, the runtime validates the manifest and injects only stable metadata into the
+system prompt: each declared ID, source, and description. It does not inject instruction bodies or
+referenced files. The model receives two generic tools, `load_skill(skill_id)` and
+`read_skill_file(skill_id, path)`, which fetch the selected instruction body (without YAML
+frontmatter) or reference file only when needed. Metadata comes from the declared `SKILL.md`
+frontmatter, and declarations retain their `agent.toml` order.
+
+The runtime fails closed at these boundaries:
+
+- `agent.toml` may declare at most 60 skills, with unique IDs.
+- Loaded instruction bodies, referenced files, and local YAML frontmatter are limited to 1 MiB;
+  loaded content must be UTF-8.
+- A local source must be project-relative and remain inside the project after symlinks are resolved.
+  Reference paths must be contained relative paths inside that declared skill; absolute paths,
+  Windows drives, empty/`.`/`..` segments, and symlink escapes are rejected.
+- The declaration ID, skill directory name, and `SKILL.md` frontmatter name must match. Only
+  manifest-declared IDs can be loaded.
+
+Non-goals for this first release are OpenAI-template skill execution, skill authoring or publishing,
+remote registries, automatic discovery/attachment, eager prompt injection, arbitrary filesystem
+reads, and executing scripts from a skill. `mason skills add` explicitly rejects OpenAI projects,
+and OpenAI templates do not install the skill runtime. Mason also rejects a nonempty `[[skills]]`
+declaration when loading an OpenAI manifest, including before `mason dev` or `mason deploy`; OpenAI
+projects without skills keep working. Skills provide instructions and readable files only; they do
+not add an execution primitive or expose one model tool per skill.
 
 ## Initialize the chat app demo
 

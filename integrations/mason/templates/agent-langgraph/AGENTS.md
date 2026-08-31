@@ -77,6 +77,8 @@ curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
 | Add a function tool | new `*.py` in `agent/tools/` with a `@tool` function (auto-collected) |
 | Require human approval for a tool | add its name to `REQUIRE_APPROVAL` in `agent/agent.py` |
 | Add an MCP server | append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py` |
+| Attach a UC or local skill | use `mason skills add ...`; the exact binding is stored in `agent.toml` |
+| Change skill loading | `agent/mason/skill_manifest.py` and `agent/mason/skill_runtime.py` |
 | Change how a request maps to a run | `agent/agent.py` (`invoke_handler` / `stream_handler`) |
 | Change the session checkpointer | `agent/mason/session_store.py` |
 | Change the HTTP surface (routes, SSE, background wiring) | `runtime/runtime.py` |
@@ -97,6 +99,26 @@ migration is localized.
 `@tool`-decorated `BaseTool` it finds. So a tool registers just by existing in a file there —
 `create_agent_graph()` calls `all_tools()`. **Do not** edit `agent/agent.py` to add a tool — just add
 a file to `agent/tools/`.
+
+## How skills load
+
+Skills are LangGraph-only in this release. `agent.toml` stores exact project-local declarations:
+
+```toml
+[[skills]]
+id = "project-review"
+source = { kind = "local", path = ".claude/skills/project-review" }
+```
+
+Graph construction injects only ID/source/description metadata. Instruction bodies and referenced
+files stay behind the generic `load_skill` and `read_skill_file` tools. The runtime accepts at most
+60 unique declarations, caps bodies/files/frontmatter at 1 MiB, requires loaded content to be UTF-8,
+and resolves local sources within the project and reference files within the declared skill. It
+rejects traversal, absolute/Windows-drive paths, and symlink escapes.
+
+Do not add eager body injection, per-skill model tools, script execution, arbitrary filesystem reads,
+automatic discovery/attachment, authoring/publishing, or OpenAI-template support as part of this
+first-release seam. The full customer commands and boundary details are in `README.md`.
 
 ## Sessions & durability
 
@@ -131,6 +153,8 @@ leave either half unset to skip. `runtime/runtime.py` opens a per-request span r
 | --- | --- |
 | Run locally | `uv run start-server` |
 | Test | `uv run pytest` (hermetic; live model test runs only with a profile) |
+| List configured skills | `mason skills list --source .` |
+| Attach a local skill | `mason skills add custom .claude/skills/project-review --source .` |
 | Deploy | `mason deploy agent-langgraph --source .` |
 
 ## Notes for maintainers

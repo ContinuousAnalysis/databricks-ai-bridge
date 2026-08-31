@@ -9,7 +9,7 @@ from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
-from agent.mason import mcp_runtime, tracing
+from agent.mason import mcp_runtime, skill_runtime, tracing
 from agent.mason.memory import memory_tools
 from agent.mason.session_store import checkpointer, thread_config
 from agent.mason.workspace import workspace_client, workspace_headers
@@ -69,14 +69,16 @@ def _check_databricks_auth() -> None:
 
 
 async def create_agent_graph():
-    """Build the LangGraph agent: local tools + long-term-memory tools + any MCP tools."""
-    tools = [*all_tools(), *memory_tools(), *await mcp_runtime.mcp_tools()]
+    """Build the LangGraph agent with local, memory, MCP, and lazily loaded skill tools."""
+    skill_prompt, skill_tools = await skill_runtime.build_skill_context()
+    tools = [*all_tools(), *memory_tools(), *await mcp_runtime.mcp_tools(), *skill_tools]
     middleware = (
         [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
     )
     return create_agent(
         model=_RoutedChatDatabricks(endpoint=MODEL, workspace_client=workspace_client()),
         tools=tools,
+        system_prompt=skill_prompt or None,
         middleware=middleware,
         checkpointer=checkpointer(),
     )

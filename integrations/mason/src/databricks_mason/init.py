@@ -65,6 +65,12 @@ def _install_runtime_plumbing(project: pathlib.Path) -> None:
     (mason / "tool_manifest.py").write_text(
         _runtime_template("tool_manifest_runtime.py"), encoding="utf-8"
     )
+    (mason / "skill_manifest.py").write_text(
+        _runtime_template("skill_manifest_runtime.py"), encoding="utf-8"
+    )
+    (mason / "skill_runtime.py").write_text(
+        _runtime_template("skill_runtime_langgraph.py"), encoding="utf-8"
+    )
     (mason / "mcp_runtime.py").write_text(
         _runtime_template("mcp_runtime_langgraph.py"), encoding="utf-8"
     )

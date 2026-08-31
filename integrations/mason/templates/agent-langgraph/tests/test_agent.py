@@ -67,9 +67,7 @@ def test_chat_model_forwards_account_routing_header(monkeypatch):
     monkeypatch.setenv("DATABRICKS_WORKSPACE_ID", "123456")
     model = _RoutedChatDatabricks(endpoint="test-endpoint")
 
-    assert model._get_client_kwargs()["default_headers"] == {
-        "X-Databricks-Org-Id": "123456"
-    }
+    assert model._get_client_kwargs()["default_headers"] == {"X-Databricks-Org-Id": "123456"}
 
 
 def test_thread_config_from_session_id():
@@ -245,3 +243,73 @@ async def test_agent_responds_end_to_end():
         config=thread_config("test-e2e"),
     )
     assert result["messages"][-1].content
+
+
+@pytest.mark.asyncio
+async def test_create_agent_graph_appends_generic_skill_tools_and_metadata_prompt(monkeypatch):
+    import agent.agent as agent_module
+
+    captured = {}
+    local_tools = [object()]
+    memory = [object()]
+    mcp = [object()]
+    skill_tools = [
+        type("Tool", (), {"name": "load_skill"})(),
+        type("Tool", (), {"name": "read_skill_file"})(),
+    ]
+
+    async def mcp_tools():
+        return mcp
+
+    async def build_skill_context():
+        return "Available skills:\n- [review] (local:skills/review) Review.", skill_tools
+
+    def create_agent(**kwargs):
+        captured.update(kwargs)
+        return "graph"
+
+    monkeypatch.setattr(agent_module, "all_tools", lambda: local_tools)
+    monkeypatch.setattr(agent_module, "memory_tools", lambda: memory)
+    monkeypatch.setattr(agent_module.mcp_runtime, "mcp_tools", mcp_tools)
+    monkeypatch.setattr(agent_module.skill_runtime, "build_skill_context", build_skill_context)
+    monkeypatch.setattr(agent_module, "create_agent", create_agent)
+    monkeypatch.setattr(agent_module, "_RoutedChatDatabricks", lambda **kwargs: "model")
+    monkeypatch.setattr(agent_module, "workspace_client", lambda: "workspace")
+    monkeypatch.setattr(agent_module, "checkpointer", lambda: "checkpointer")
+
+    assert await agent_module.create_agent_graph() == "graph"
+    assert captured["tools"] == [*local_tools, *memory, *mcp, *skill_tools]
+    assert captured["system_prompt"] == (
+        "Available skills:\n- [review] (local:skills/review) Review."
+    )
+    assert {tool.name for tool in captured["tools"] if hasattr(tool, "name")} == {
+        "load_skill",
+        "read_skill_file",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_agent_graph_omits_empty_skill_prompt(monkeypatch):
+    import agent.agent as agent_module
+
+    captured = {}
+
+    async def build_skill_context():
+        return "", []
+
+    async def mcp_tools():
+        return []
+
+    monkeypatch.setattr(agent_module.skill_runtime, "build_skill_context", build_skill_context)
+    monkeypatch.setattr(agent_module.mcp_runtime, "mcp_tools", mcp_tools)
+    monkeypatch.setattr(agent_module, "all_tools", lambda: [])
+    monkeypatch.setattr(agent_module, "memory_tools", lambda: [])
+    monkeypatch.setattr(agent_module, "_RoutedChatDatabricks", lambda **kwargs: "model")
+    monkeypatch.setattr(agent_module, "workspace_client", lambda: "workspace")
+    monkeypatch.setattr(agent_module, "checkpointer", lambda: "checkpointer")
+    monkeypatch.setattr(
+        agent_module, "create_agent", lambda **kwargs: captured.update(kwargs) or "graph"
+    )
+
+    assert await agent_module.create_agent_graph() == "graph"
+    assert captured["system_prompt"] is None

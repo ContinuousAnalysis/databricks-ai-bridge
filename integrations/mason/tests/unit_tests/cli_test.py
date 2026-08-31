@@ -25,6 +25,7 @@ def test_root_registers_supported_commands():
         "deploy",
         "deployments",
         "mcp",
+        "skills",
         "tools",
     } <= names
     assert "add-sandbox" not in names
