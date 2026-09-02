@@ -187,8 +187,13 @@ mason --profile <profile> deploy mason-agent-demo --source . \
   --with-session-store mason-demo-sessions \
   --with-memory-store mason-demo-memory \
   --actor-id alice \
+  --compute-min-instances 2 \
+  --compute-max-instances 2 \
   --create-stores
 ```
+
+Set both compute instance flags together. Equal values request a fixed instance count; workspace
+limits still apply.
 
 The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky routing key and the
 application session id. The browser sends it automatically; API clients must reuse it as a cookie.

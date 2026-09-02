@@ -108,6 +108,126 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
 
 
+def test_deploy_creates_app_with_instance_bounds(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: False)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda name, profile: None)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: calls.append(args)
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        [
+            "myapp",
+            "--source",
+            str(src),
+            "--compute-min-instances",
+            "2",
+            "--compute-max-instances",
+            "4",
+        ],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [
+        "apps",
+        "create",
+        "myapp",
+        "--compute-min-instances",
+        "2",
+        "--compute-max-instances",
+        "4",
+    ] in calls
+
+
+def test_deploy_updates_existing_app_instance_bounds(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: calls.append(args)
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        [
+            "myapp",
+            "--source",
+            str(src),
+            "--compute-min-instances",
+            "2",
+            "--compute-max-instances",
+            "2",
+        ],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [
+        "apps",
+        "update",
+        "myapp",
+        "--compute-min-instances",
+        "2",
+        "--compute-max-instances",
+        "2",
+    ] in calls
+
+
+def test_deploy_requires_both_instance_bounds():
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--compute-min-instances", "2"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert "must be set together" in result.output
+
+
+def test_deploy_rejects_inverted_instance_bounds():
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        [
+            "myapp",
+            "--compute-min-instances",
+            "4",
+            "--compute-max-instances",
+            "2",
+        ],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert "cannot exceed" in result.output
+
+
+def test_deploy_help_exposes_scaling_and_sticky_routing():
+    result = CliRunner().invoke(deploy_mod.deploy, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "--compute-min-instances" in result.output
+    assert "--compute-max-instances" in result.output
+    assert "sticky routing" in result.output
+    assert "__Host-databricks-app-router" in result.output
+
+
 def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()

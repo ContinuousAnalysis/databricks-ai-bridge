@@ -83,6 +83,30 @@ def _validate_deployment_name(name: str) -> str:
     return name
 
 
+def _compute_scaling_args(
+    compute_min_instances: Optional[int], compute_max_instances: Optional[int]
+) -> list[str]:
+    """Build Databricks Apps scaling arguments, validating the paired API contract."""
+    if (compute_min_instances is None) != (compute_max_instances is None):
+        raise AgentCliError(
+            "App instance bounds must be set together.",
+            hint="Pass both --compute-min-instances and --compute-max-instances.",
+        )
+    if compute_min_instances is None or compute_max_instances is None:
+        return []
+    if compute_min_instances > compute_max_instances:
+        raise AgentCliError(
+            "Minimum app instances cannot exceed maximum app instances.",
+            hint="Choose --compute-min-instances less than or equal to --compute-max-instances.",
+        )
+    return [
+        "--compute-min-instances",
+        str(compute_min_instances),
+        "--compute-max-instances",
+        str(compute_max_instances),
+    ]
+
+
 def _confirm_destroy(target: str, *, assume_yes: bool) -> None:
     """Prompt before a destructive deployment op; --yes/-y skips it (for scripts)."""
     if assume_yes:
@@ -347,6 +371,18 @@ def _grant_store_access(
     default=None,
     help="Workspace destination for the synced source (defaults to a per-user path).",
 )
+@click.option(
+    "--compute-min-instances",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Minimum number of Databricks Apps instances. Must be set with --compute-max-instances.",
+)
+@click.option(
+    "--compute-max-instances",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Maximum number of Databricks Apps instances. Must be set with --compute-min-instances.",
+)
 @click.pass_obj
 def deploy(
     obj,
@@ -360,9 +396,20 @@ def deploy(
     create_stores,
     pip_index_url,
     workspace_path,
+    compute_min_instances,
+    compute_max_instances,
 ) -> None:
-    """Deploy an agent: provision its stores, wire them in, and roll out the deployment."""
+    """Deploy an agent: provision its stores, wire them in, and roll out the deployment.
+
+    Databricks Apps provides best-effort sticky routing (session affinity) for horizontally scaled
+    deployments. Browsers preserve the routing cookie automatically.
+
+    \b
+    API clients must reuse a stable UUID in this cookie on every request:
+      __Host-databricks-app-router=<uuid>
+    """
     _validate_deployment_name(name)
+    compute_args = _compute_scaling_args(compute_min_instances, compute_max_instances)
     source_dir = pathlib.Path(source)
     client = obj.client()
 
@@ -389,6 +436,12 @@ def deploy(
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
         provisioned["Package index"] = pip_index_url
+    if compute_min_instances is not None:
+        provisioned["App instances"] = (
+            str(compute_min_instances)
+            if compute_min_instances == compute_max_instances
+            else f"{compute_min_instances}-{compute_max_instances}"
+        )
 
     # 2. Patch the app.yaml manifest with the store identifiers.
     scaffolded = False
@@ -397,10 +450,12 @@ def deploy(
 
     # 3. Roll out the deployment (Databricks Apps runtime).
     if not _deployment_exists(name, obj.profile):
-        _databricks(["apps", "create", name], obj.profile)
+        _databricks(["apps", "create", name, *compute_args], obj.profile)
         # `apps create` returns before the app's compute is up, but `apps deploy` requires it to be
         # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
         _wait_for_running(name, obj.profile)
+    elif compute_args:
+        _databricks(["apps", "update", name, *compute_args], obj.profile)
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own

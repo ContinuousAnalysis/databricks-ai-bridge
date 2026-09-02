@@ -87,7 +87,10 @@ _EXAMPLES: dict[CommandPath, tuple[str, ...]] = {
     ("tracing", "list"): ("mason tracing list --experiment /Users/me/mason-traces/my-agent",),
     ("tracing", "get"): ("mason tracing get <trace-id>",),
     ("tracing", "instrument"): ("mason tracing instrument --destination main.agent_traces",),
-    ("deploy",): ("mason deploy my-agent",),
+    ("deploy",): (
+        "mason deploy my-agent",
+        "mason deploy my-agent --compute-min-instances 2 --compute-max-instances 2",
+    ),
     ("deployments",): ("mason deployments list",),
     ("deployments", "list"): ("mason deployments list",),
     ("deployments", "get"): ("mason deployments get my-agent",),
