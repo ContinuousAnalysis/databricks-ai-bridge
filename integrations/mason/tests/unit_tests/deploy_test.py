@@ -218,7 +218,7 @@ def test_wait_for_running_times_out(monkeypatch):
         pass
 
 
-def test_deploy_injects_shared_actor_for_managed_stores(tmp_path: pathlib.Path, monkeypatch):
+def test_deploy_injects_store_env_without_actor(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
@@ -232,17 +232,7 @@ def test_deploy_injects_shared_actor_for_managed_stores(tmp_path: pathlib.Path, 
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        [
-            "myapp",
-            "--source",
-            str(src),
-            "--memory",
-            "mem",
-            "--session",
-            "sessions",
-            "--actor-id",
-            "alice",
-        ],
+        ["myapp", "--source", str(src), "--memory", "mem", "--session", "sessions"],
         obj=_FakeCtx(),
     )
 
@@ -251,8 +241,11 @@ def test_deploy_injects_shared_actor_for_managed_stores(tmp_path: pathlib.Path, 
         entry["name"]: entry["value"]
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
-    assert env["AGENT_MEMORY_ACTOR_ID"] == "alice"
-    assert env["AGENT_SESSION_ACTOR_ID"] == "alice"
+    assert env["AGENT_MEMORY_STORE"]  # resolved memory store id
+    assert env["AGENT_SESSION_STORE"] == "sessions"
+    # The actor is derived per request from the signed-in user, not injected at deploy time.
+    assert "AGENT_MEMORY_ACTOR_ID" not in env
+    assert "AGENT_SESSION_ACTOR_ID" not in env
 
 
 def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypatch):

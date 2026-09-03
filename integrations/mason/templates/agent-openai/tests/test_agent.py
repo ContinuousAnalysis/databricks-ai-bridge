@@ -180,10 +180,10 @@ async def test_agent_responds_end_to_end():
     from databricks_mason.openai import session_store
 
     configure()
-    agent = create_agent()
+    agent = create_agent("test-actor")
     result = await Runner.run(
         agent,
         [{"role": "user", "content": "Reply with the single word: pong"}],
-        session=session_store("test-e2e"),
+        session=session_store("test-e2e", "test-actor"),
     )
     assert result.final_output
