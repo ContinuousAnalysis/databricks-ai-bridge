@@ -11,8 +11,8 @@ from typing import Any
 
 import click
 
-from databricks_mason import render
-from databricks_mason.agent_project import AgentProject, Scope, ToolSpec
+from databricks_mason.cli import render
+from databricks_mason.cli.agent_project import AgentProject, Scope, ToolSpec
 from databricks_mason.errors import AgentCliError
 
 _PYTHON_TOOL_TEMPLATE = "python_tool_langgraph.py"

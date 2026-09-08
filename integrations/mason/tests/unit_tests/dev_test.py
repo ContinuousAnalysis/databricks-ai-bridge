@@ -7,8 +7,8 @@ from unittest import mock
 
 from click.testing import CliRunner
 
-from databricks_mason import dev as dev_mod
-from databricks_mason.agent_project import AgentProject
+from databricks_mason.cli import dev as dev_mod
+from databricks_mason.cli.agent_project import AgentProject
 
 
 class _Ctx:

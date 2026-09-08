@@ -11,7 +11,7 @@ import json
 
 from click.testing import CliRunner
 
-from databricks_mason import tracing as tracing_mod
+from databricks_mason.cli import tracing as tracing_mod
 from databricks_mason.errors import AgentCliError
 
 

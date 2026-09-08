@@ -6,7 +6,7 @@ import pathlib
 
 import pytest
 
-from databricks_mason.agent_project import AgentProject, Scope, ToolSpec
+from databricks_mason.cli.agent_project import AgentProject, Scope, ToolSpec
 from databricks_mason.errors import AgentCliError
 
 
@@ -96,7 +96,7 @@ def test_write_is_atomic_when_replace_fails(tmp_path: pathlib.Path, monkeypatch)
     def fail_replace(source, target):
         raise OSError("replace failed")
 
-    monkeypatch.setattr("databricks_mason.agent_project.os.replace", fail_replace)
+    monkeypatch.setattr("databricks_mason.cli.agent_project.os.replace", fail_replace)
     with pytest.raises(AgentCliError, match="replace failed"):
         project.write()
 

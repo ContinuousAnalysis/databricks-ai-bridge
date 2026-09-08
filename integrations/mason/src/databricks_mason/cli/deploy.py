@@ -25,15 +25,15 @@ import yaml
 from databricks_mason import (
     lakebase_durability_store,
     memory_store_access,
-    render,
     session_store_access,
     timefmt,
 )
-from databricks_mason.agent_project import AgentProject
+from databricks_mason.cli import render
+from databricks_mason.cli.agent_project import AgentProject
+from databricks_mason.cli.render import field
+from databricks_mason.cli.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
 from databricks_mason.errors import AgentCliError
-from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
-from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
 
 _AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
 _AGENT_DURABILITY_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
@@ -247,8 +247,6 @@ def _memory_store_database(client, memory_store: str) -> Optional[str]:
 
 def _load_project(source: pathlib.Path):
     """The AgentProject at `source`, or None when there's no readable agent.toml."""
-    from databricks_mason.agent_project import AgentProject
-
     try:
         return AgentProject.load(source)
     except AgentCliError:

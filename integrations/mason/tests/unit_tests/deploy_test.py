@@ -11,7 +11,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from databricks_mason import deploy as deploy_mod
+from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
 
 
@@ -889,7 +889,7 @@ def test_store_bindings_ignores_missing_manifest(tmp_path: pathlib.Path):
 
 
 def test_deploy_writes_deployment_name_to_toml(tmp_path: pathlib.Path, monkeypatch):
-    from databricks_mason.agent_project import AgentProject
+    from databricks_mason.cli.agent_project import AgentProject
 
     src = tmp_path / "app"
     src.mkdir()

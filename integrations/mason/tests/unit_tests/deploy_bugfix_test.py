@@ -9,9 +9,9 @@ from unittest import mock
 import pytest
 from click.testing import CliRunner
 
-from databricks_mason import deploy as deploy_mod
 from databricks_mason import session_store_access
 from databricks_mason import store_access as sa
+from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
 
 

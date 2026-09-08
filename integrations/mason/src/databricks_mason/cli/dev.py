@@ -15,9 +15,9 @@ from typing import Optional
 import click
 import yaml
 
-from databricks_mason import render
-from databricks_mason.agent_project import AgentProject
-from databricks_mason.deploy import (
+from databricks_mason.cli import render
+from databricks_mason.cli.agent_project import AgentProject
+from databricks_mason.cli.deploy import (
     _upsert_manifest_env,
     store_bindings,
     validate_stores_and_trace_env,
