@@ -8,6 +8,7 @@ import types
 from unittest import mock
 
 import pytest
+import tomli
 import yaml
 from click.testing import CliRunner
 
@@ -443,6 +444,84 @@ def test_deploy_rejects_invalid_project_instead_of_silently_skipping_durability(
 
     assert result.exit_code != 0
     assert "enabled = true or false" in result.output
+
+
+def test_deploy_rejects_legacy_file_git_mason_source(tmp_path: pathlib.Path) -> None:
+    # A legacy file:// git pin can't be bundled automatically, so deploy fails fast with a fix.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / "pyproject.toml").write_text(
+        '[project]\nname = "t"\ndependencies = ["databricks-mason[runtime]>=0.1"]\n\n'
+        "[tool.uv.sources]\ndatabricks-mason = "
+        '{ git = "file:///home/dev/ai-bridge", rev = "abc", subdirectory = "integrations/mason" }\n'
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert "local git checkout" in result.output
+
+
+def test_deploy_bundles_local_mason_wheel_and_restores_project(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    # An editable local `path` pin is built into a wheel, bundled under vendor/, and pinned by
+    # relative path for the sync — then the developer's working tree is restored afterward.
+    mason_dir = tmp_path / "checkout" / "integrations" / "mason"
+    mason_dir.mkdir(parents=True)
+    (mason_dir / "pyproject.toml").write_text('[project]\nname = "databricks-mason"\n')
+
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_agent_manifest(src)
+    original_pin = f'{{ path = "{mason_dir}", editable = true }}'
+    (src / "pyproject.toml").write_text(
+        '[project]\nname = "t"\ndependencies = ["databricks-mason[runtime]>=0.1"]\n\n'
+        f"[tool.uv.sources]\ndatabricks-mason = {original_pin}\n"
+    )
+
+    def fake_uv(cmd, **kwargs):
+        assert cmd[:4] == ["uv", "build", "--wheel", str(mason_dir)]
+        out_dir = pathlib.Path(cmd[cmd.index("--out-dir") + 1])
+        (out_dir / "databricks_mason-9.9.9-py3-none-any.whl").write_bytes(b"wheel")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(deploy_mod.subprocess, "run", fake_uv)
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+
+    synced_pins = []
+
+    def fake_databricks(args, profile, **kwargs):
+        if args[:2] == ["apps", "deploy"]:
+            pin = tomli.loads((src / "pyproject.toml").read_text())
+            synced_pins.append(pin["tool"]["uv"]["sources"]["databricks-mason"])
+            assert (src / "vendor" / "databricks_mason-9.9.9-py3-none-any.whl").is_file()
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--no-create-stores"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    # the synced project pinned the bundled wheel by relative path
+    assert synced_pins == [{"path": "vendor/databricks_mason-9.9.9-py3-none-any.whl"}]
+    # the working tree is restored: editable pin back, vendor/ gone
+    restored = tomli.loads((src / "pyproject.toml").read_text())
+    assert restored["tool"]["uv"]["sources"]["databricks-mason"] == {
+        "path": str(mason_dir),
+        "editable": True,
+    }
+    assert not (src / "vendor").exists()
 
 
 def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(

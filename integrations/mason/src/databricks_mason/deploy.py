@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shutil
+import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -24,6 +26,7 @@ import yaml
 
 from databricks_mason import (
     lakebase_durability_store,
+    mason_source,
     render,
     timefmt,
 )
@@ -250,6 +253,71 @@ def _load_project(source: pathlib.Path):
     return AgentProject.load(source)
 
 
+def _resolve_mason_bundle(
+    source: pathlib.Path, mason_source_path: Optional[str]
+) -> Optional[pathlib.Path]:
+    """The local Mason package dir to build and bundle into the deployment, or None.
+
+    `--mason-source` names it explicitly; otherwise a project left with an editable local `path`
+    pin (what `mason init` writes from an editable checkout) is bundled automatically so a
+    developer's local Mason deploys. Returns the `integrations/mason` package directory.
+    """
+    if mason_source_path is not None:
+        return pathlib.Path(mason_source_path).expanduser().resolve()
+    pin = mason_source.read(source / "pyproject.toml")
+    if pin and isinstance(pin.get("path"), str):
+        return pathlib.Path(pin["path"]).expanduser().resolve()
+    return None
+
+
+def _reject_local_mason_source(source: pathlib.Path) -> None:
+    """Fail fast on a machine-local databricks-mason pin that can't be bundled automatically.
+
+    A `path` pin is handled by `_resolve_mason_bundle` (built into a wheel and bundled). A legacy
+    `file://` git pin can't be, so surface a clear fix rather than letting the in-sandbox Apps build
+    fail cryptically on a filesystem it can't reach.
+    """
+    pin = mason_source.read(source / "pyproject.toml")
+    if pin and str(pin.get("git", "")).startswith("file://"):
+        raise AgentCliError(
+            "This project pins databricks-mason to a local git checkout, which the Apps build "
+            "can't reach.",
+            hint="Re-run `mason init` from your checkout, or pass `mason deploy --mason-source "
+            "<path/to/integrations/mason>` to build and bundle it.",
+        )
+
+
+def _bundle_mason_wheel(source: pathlib.Path, mason_dir: pathlib.Path) -> None:
+    """Build databricks-mason from `mason_dir` into `source/vendor` and pin the scaffold to it.
+
+    The Apps build resolves dependencies from the synced source, so a wheel dropped in the project
+    and referenced by a relative `path` deploys unpublished Mason code without a registry or fork.
+    """
+    if not (mason_dir / "pyproject.toml").is_file():
+        raise AgentCliError(
+            f"No databricks-mason package at {mason_dir} (expected a pyproject.toml)."
+        )
+    vendor = source / "vendor"
+    vendor.mkdir(exist_ok=True)
+    result = subprocess.run(
+        ["uv", "build", "--wheel", str(mason_dir), "--out-dir", str(vendor)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AgentCliError(
+            "Could not build the databricks-mason wheel.",
+            hint=(result.stderr or result.stdout or "").strip(),
+        )
+    wheels = sorted(vendor.glob("databricks_mason-*.whl"))
+    if not wheels:
+        raise AgentCliError(f"`uv build` produced no wheel in {vendor}.")
+    mason_source.write(
+        source / "pyproject.toml", mason_source.wheel(str(wheels[-1].relative_to(source)))
+    )
+
+
 def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
     """The (memory, session) stores bound in agent.toml via `mason memory/sessions bind`.
 
@@ -449,6 +517,14 @@ def _grant_store_access(
     is_flag=True,
     help="Don't auto-create the default memory/session stores for slots unbound in agent.toml.",
 )
+@click.option(
+    "--mason-source",
+    "mason_source_path",
+    default=None,
+    type=click.Path(exists=True, file_okay=False),
+    help="Build databricks-mason from this local checkout (its integrations/mason dir) and bundle "
+    "it into the deployment — for testing unpublished Mason without a registry or fork.",
+)
 @click.pass_obj
 def deploy(
     obj,
@@ -458,6 +534,7 @@ def deploy(
     workspace_path,
     instances,
     no_create_stores,
+    mason_source_path,
 ) -> None:
     """Deploy an agent: validate its bound stores, wire in tracing, and roll out the deployment.
 
@@ -477,6 +554,9 @@ def deploy(
       __Host-databricks-app-router=<uuid>
     """
     source_dir = pathlib.Path(source)
+    mason_bundle = _resolve_mason_bundle(source_dir, mason_source_path)
+    if mason_bundle is None:
+        _reject_local_mason_source(source_dir)
     project = _load_project(source_dir)
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
@@ -608,16 +688,29 @@ def deploy(
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own
     # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
-    _databricks(
-        ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"],
-        obj.profile,
-        action=f"Could not upload the agent source for '{name}'.",
-    )
-    _databricks(
-        ["apps", "deploy", name, "--source-code-path", ws_path],
-        obj.profile,
-        action=f"Could not deploy '{name}'.",
-    )
+    #
+    # When bundling local Mason, build the wheel into the source and repoint the pin at it just for
+    # the sync, then restore the project so the developer's working tree keeps its editable pin.
+    original_pyproject = None
+    try:
+        if mason_bundle is not None:
+            with render.status(f"Building databricks-mason from {mason_bundle}…"):
+                original_pyproject = (source_dir / "pyproject.toml").read_text()
+                _bundle_mason_wheel(source_dir, mason_bundle)
+        _databricks(
+            ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"],
+            obj.profile,
+            action=f"Could not upload the agent source for '{name}'.",
+        )
+        _databricks(
+            ["apps", "deploy", name, "--source-code-path", ws_path],
+            obj.profile,
+            action=f"Could not deploy '{name}'.",
+        )
+    finally:
+        if original_pyproject is not None:
+            (source_dir / "pyproject.toml").write_text(original_pyproject)
+            shutil.rmtree(source_dir / "vendor", ignore_errors=True)
 
     # 6. Grant the app's service principal what it needs to run (best-effort):
     #    - stores: grant the SP read/write via the managed store API (the store service does the
