@@ -4,6 +4,10 @@ An OpenAI Agents SDK agent served by `databricks_mason.AgentApp`. Mason keeps in
 events in memory during `mason dev`. On deployment, Mason attaches a Runtime Store for persisted
 invocation state, events, and recovery.
 
+For normal agent development, edit `agent/agent.py` and leave the generated files under `runtime/`
+unchanged. The Runtime adapter translates Mason requests and events to the OpenAI Agents SDK; it
+does not own the agent's model, instructions, or tools.
+
 ## Run locally
 
 ```bash
@@ -84,8 +88,9 @@ Use `mason init --framework openai --disable-chat-app` for API-only output.
 
 ## Configure and deploy
 
-- Change model/instructions in `agent/agent.py`.
-- Change invocation input, event translation, or recovery in `runtime/adapter.py`.
+- Change the model, instructions, and tools in `agent/agent.py`.
+- Leave `runtime/adapter.py` unchanged unless you intentionally need a custom wire protocol or
+  recovery policy.
 - Add local tools under `agent/tools/`; modules are auto-discovered.
 - Add MCP servers in `agent/mcps.py` or with `mason tools add mcp`.
 - Bind long-term memory with `mason memory bind <store>`.

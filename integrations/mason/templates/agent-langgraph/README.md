@@ -4,6 +4,10 @@ A LangGraph agent served by `databricks_mason.AgentApp`. Mason keeps invocation 
 memory during `mason dev`. On deployment, Mason attaches a Runtime Store for persisted invocation
 state, events, and recovery.
 
+For normal agent development, edit `agent/agent.py` and leave the generated files under `runtime/`
+unchanged. The Runtime adapter translates Mason requests and events to LangGraph; it does not own
+the agent's model, instructions, tools, or graph.
+
 ## Run locally
 
 ```bash
@@ -93,8 +97,9 @@ Use `mason init --framework langgraph --disable-chat-app` for API-only output.
 
 ## Configure and deploy
 
-- Change model/instructions in `agent/agent.py`.
-- Change invocation input, event translation, or recovery in `runtime/adapter.py`.
+- Change the model, instructions, tools, and graph in `agent/agent.py`.
+- Leave `runtime/adapter.py` unchanged unless you intentionally need a custom wire protocol or
+  recovery policy.
 - Add local tools under `agent/tools/`; modules are auto-discovered.
 - Add MCP servers in `agent/mcps.py` or with `mason tools add mcp`.
 - Bind long-term memory with `mason memory bind <store>`.

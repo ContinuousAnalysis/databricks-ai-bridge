@@ -1,4 +1,4 @@
-"""Adapt the framework-native OpenAI agent to Mason Runtime."""
+"""Generated OpenAI-to-Mason glue; most applications should not edit this file."""
 
 import asyncio
 import logging

@@ -1,4 +1,4 @@
-"""Adapt the framework-native LangGraph agent to Mason Runtime."""
+"""Generated LangGraph-to-Mason glue; most applications should not edit this file."""
 
 import logging
 from collections.abc import AsyncGenerator, AsyncIterator

@@ -45,8 +45,10 @@ sticky routing and is not authentication or application session state.
 | Browser and managed-state routes | `runtime/ui.py` |
 | Browser behavior | `ui/app.js` |
 
-Keep framework-native agent logic independent of Mason request and recovery types. Add custom HTTP
-endpoints to the same `AgentApp` in `runtime/main.py` when needed.
+Keep framework-native agent logic independent of Mason request and recovery types. Normal agent
+changes belong in `agent/agent.py`; treat `runtime/adapter.py` as generated glue unless the wire
+protocol or recovery policy itself must change. Add custom HTTP endpoints to the same `AgentApp` in
+`runtime/main.py` when needed.
 
 ## State and recovery
 
