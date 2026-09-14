@@ -1,9 +1,8 @@
 # Mason OpenAI Agent
 
 An OpenAI Agents SDK agent served by `databricks_mason.AgentApp`. Mason keeps invocation state and
-events in memory during `mason dev`. The generated app enables the durable runtime by default, so
-deployment stores them in an app-owned Lakebase schema and recovers interrupted work. Initialize
-with `--no-durable-runtime` for process-local deployed state instead.
+events in memory during `mason dev`. On deployment, Mason attaches a Runtime Store for persisted
+invocation state, events, and recovery.
 
 ## Run locally
 
@@ -48,7 +47,7 @@ curl -sS http://localhost:8000/api/invocations \
 curl -sS "http://localhost:8000/api/invocations/$INVOCATION_ID" | jq
 ```
 
-SSE records contain the events emitted by `agent/agent.py`: token `delta`s, completed `message`s,
+SSE records contain the events translated by `runtime/adapter.py`: token `delta`s, completed `message`s,
 and HITL `interrupt`s. Replay from a cursor with
 `GET /api/invocations/{id}/events?after={sequence}`.
 
@@ -72,12 +71,10 @@ history, but not a pending approval across restarts or replicas.
 
 ## Crash recovery
 
-When `[durability] enabled = true` in `agent.toml`, `runtime/main.py` registers both `@app.invoke` and
-`@app.on_recovery`. OpenAI Agents SDK does not currently expose LangGraph-style node checkpoints, so
-recovery replays the persisted application input against the same session. Invocation state and
-emitted events survive process loss in deployed Lakebase, but tool calls and other external side
-effects remain at-least-once and must be idempotent. With `--no-durable-runtime`, only `@app.invoke`
-is registered and invocation state and events remain process-local.
+`runtime/main.py` registers the hooks from `runtime/adapter.py`. OpenAI Agents SDK does not currently
+expose LangGraph-style node checkpoints, so recovery replays the persisted application input against
+the same session. Invocation state and emitted events survive process loss in the deployed Runtime
+Store, but tool calls and other external side effects remain at-least-once and must be idempotent.
 
 ## Chat app
 
@@ -88,6 +85,7 @@ Use `mason init --framework openai --disable-chat-app` for API-only output.
 ## Configure and deploy
 
 - Change model/instructions in `agent/agent.py`.
+- Change invocation input, event translation, or recovery in `runtime/adapter.py`.
 - Add local tools under `agent/tools/`; modules are auto-discovered.
 - Add MCP servers in `agent/mcps.py` or with `mason tools add mcp`.
 - Bind long-term memory with `mason memory bind <store>`.
@@ -97,10 +95,8 @@ Use `mason init --framework openai --disable-chat-app` for API-only output.
 mason --profile <profile> deploy agent-openai --source .
 ```
 
-By default, `agent.toml` contains `[durability] enabled = true`. Deployment provisions or reuses the
-app's dedicated durability Lakebase project. Only the app-owned
-`databricks_mason_runtime_<hash>` schema and runtime tables are added. A project initialized with
-`--no-durable-runtime` records `enabled = false` and provisions no durability Lakebase.
+Deployment provisions or reuses the app's dedicated Runtime Store database. Mason manages its
+runtime schema and tables; developers do not configure a Runtime Store binding in `agent.toml`.
 
 The `__Host-databricks-app-router` cookie may be supplied independently for sticky replica routing.
 It is not authentication and is not used as the template's application session ID.

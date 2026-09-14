@@ -7,6 +7,7 @@ from pathlib import Path
 import agent.agent
 import uvicorn
 from dotenv import load_dotenv
+from runtime.adapter import invoke, recover
 
 from databricks_mason import AgentApp
 from databricks_mason.agent_project import AgentProject
@@ -18,9 +19,9 @@ agent.agent.configure()
 
 durable_runtime = AgentProject.load().durability_enabled
 app = AgentApp(durable_runtime=durable_runtime)
-app.invoke(agent.agent.invoke)
+app.invoke(invoke)
 if app.durable_runtime:
-    app.on_recovery(agent.agent.on_recovery)
+    app.on_recovery(recover)
 
 
 def main() -> None:

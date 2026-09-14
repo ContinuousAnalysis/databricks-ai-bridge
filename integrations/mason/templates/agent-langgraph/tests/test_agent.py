@@ -9,10 +9,10 @@ import os
 from types import SimpleNamespace
 
 import pytest
-from agent.agent import _serialize_events
 from agent.tools import all_tools
 from databricks_mason.langgraph.session_store import checkpointer, thread_config
 from langchain_core.tools import BaseTool
+from runtime.adapter import _serialize_events
 
 
 def test_tools_autoregister():
@@ -111,7 +111,7 @@ class _FakeStoreClient:
 
 @pytest.mark.asyncio
 async def test_invoke_starts_turn_and_recovery_resumes_current_checkpoint(monkeypatch):
-    import agent.agent as agent_module
+    import runtime.adapter as adapter
 
     calls = []
 
@@ -123,13 +123,13 @@ async def test_invoke_starts_turn_and_recovery_resumes_current_checkpoint(monkey
         async def aget_tuple(self, config):
             return SimpleNamespace(metadata={"databricks_mason.invocation_id": "inv-1"})
 
-    monkeypatch.setattr(agent_module, "_run_agent", fake_run_agent)
-    monkeypatch.setattr(agent_module, "checkpointer", lambda: Saver())
+    monkeypatch.setattr(adapter, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(adapter, "checkpointer", lambda: Saver())
     context = SimpleNamespace(invocation_id="inv-1", session_id="runtime-session")
     payload = {"session_id": "session-1", "messages": [{"role": "user", "content": "hi"}]}
 
-    await agent_module.invoke(payload, context)
-    await agent_module.on_recovery(payload, context)
+    await adapter.invoke(payload, context)
+    await adapter.recover(payload, context)
 
     assert calls[0][0] == {"messages": payload["messages"]}
     assert calls[1][0] is None
@@ -137,7 +137,7 @@ async def test_invoke_starts_turn_and_recovery_resumes_current_checkpoint(monkey
 
 @pytest.mark.asyncio
 async def test_recovery_replays_input_without_current_checkpoint(monkeypatch):
-    import agent.agent as agent_module
+    import runtime.adapter as adapter
 
     calls = []
 
@@ -149,10 +149,10 @@ async def test_recovery_replays_input_without_current_checkpoint(monkeypatch):
         async def aget_tuple(self, config):
             return None
 
-    monkeypatch.setattr(agent_module, "_run_agent", fake_run_agent)
-    monkeypatch.setattr(agent_module, "checkpointer", lambda: Saver())
+    monkeypatch.setattr(adapter, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(adapter, "checkpointer", lambda: Saver())
     messages = [{"role": "user", "content": "hi"}]
-    await agent_module.on_recovery(
+    await adapter.recover(
         {"session_id": "session-1", "messages": messages},
         SimpleNamespace(invocation_id="inv-1", session_id="runtime-session"),
     )

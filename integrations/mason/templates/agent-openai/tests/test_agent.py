@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from agents import FunctionTool
-from agent.agent import _agent_events, _apply_decisions, _normalize_item, _serialize_events
 from agent.tools import all_tools
+from runtime.adapter import _agent_events, _apply_decisions, _normalize_item, _serialize_events
 
 
 def test_tools_autoregister():
@@ -73,7 +73,7 @@ class _FakeStreamResult:
 
 @pytest.mark.asyncio
 async def test_agent_events_omit_unavailable_mcp_servers(monkeypatch):
-    import agent.agent as agent_module
+    import runtime.adapter as adapter
 
     def server(name, *, connect_error=None, list_error=None, cleanup_error=None):
         value = MagicMock(name=name)
@@ -102,12 +102,12 @@ async def test_agent_events_omit_unavailable_mcp_servers(monkeypatch):
 
     create_agent = MagicMock(return_value=object())
 
-    monkeypatch.setattr(agent_module, "mcp_servers", mcp_servers)
-    monkeypatch.setattr(agent_module, "build_mcp_servers", lambda: [])
-    monkeypatch.setattr(agent_module, "create_agent", create_agent)
-    monkeypatch.setattr(agent_module, "session_store", lambda _session_id, _actor: None)
+    monkeypatch.setattr(adapter, "mcp_servers", mcp_servers)
+    monkeypatch.setattr(adapter, "build_mcp_servers", lambda: [])
+    monkeypatch.setattr(adapter, "create_agent", create_agent)
+    monkeypatch.setattr(adapter, "session_store", lambda _session_id, _actor: None)
     monkeypatch.setattr(
-        agent_module.Runner,
+        adapter.Runner,
         "run_streamed",
         lambda *_args, **_kwargs: _FakeStreamResult([], [], None),
     )
@@ -126,7 +126,7 @@ async def test_agent_events_omit_unavailable_mcp_servers(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_serialize_events_relays_interrupt_as_native_event():
-    from agent.agent import _pending_runs
+    from runtime.adapter import _pending_runs
 
     approval = _FakeToolApproval("send_message", '{"recipient": "x", "body": "y"}', "call-1")
     sentinel_state = object()
@@ -146,7 +146,7 @@ async def test_serialize_events_relays_interrupt_as_native_event():
 
 
 def test_apply_decisions_approves_pending_run(monkeypatch):
-    from agent.agent import _pending_runs
+    from runtime.adapter import _pending_runs
 
     approved = []
 
@@ -238,7 +238,7 @@ class _FakeStoreClient:
 
 @pytest.mark.asyncio
 async def test_invoke_and_recovery_use_same_application_payload(monkeypatch):
-    import agent.agent as agent_module
+    import runtime.adapter as adapter
 
     calls = []
 
@@ -246,12 +246,12 @@ async def test_invoke_and_recovery_use_same_application_payload(monkeypatch):
         calls.append((payload, context))
         return {"output": []}
 
-    monkeypatch.setattr(agent_module, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(adapter, "_run_agent", fake_run_agent)
     payload = {"session_id": "session-1", "messages": [{"role": "user", "content": "hi"}]}
     context = object()
 
-    await agent_module.invoke(payload, context)
-    await agent_module.on_recovery(payload, context)
+    await adapter.invoke(payload, context)
+    await adapter.recover(payload, context)
 
     assert calls == [(payload, context), (payload, context)]
 

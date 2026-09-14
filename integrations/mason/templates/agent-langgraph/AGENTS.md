@@ -37,27 +37,26 @@ sticky routing and is not authentication or application session state.
 
 | Change | File |
 | --- | --- |
-| Model, tools, HITL, event mapping | `agent/agent.py` |
+| Model, tools, and agent construction | `agent/agent.py` |
 | Local tools | `agent/tools/` |
 | MCP servers | `agent/mcps.py` |
-| Mason server and durable-runtime option | `runtime/main.py` |
+| Invocation input, events, and recovery | `runtime/adapter.py` |
+| Mason server and hook registration | `runtime/main.py` |
 | Browser and managed-state routes | `runtime/ui.py` |
 | Browser behavior | `ui/app.js` |
 
-Do not add another HTTP runtime. `runtime/main.py` must stay a thin layer that constructs `AgentApp`,
-registers `invoke`, registers `on_recovery` when durability is enabled in `agent.toml`, and optionally
-installs the UI.
+Keep framework-native agent logic independent of Mason request and recovery types. Add custom HTTP
+endpoints to the same `AgentApp` in `runtime/main.py` when needed.
 
 ## State and recovery
 
-- Invocation state/events: in-memory in `mason dev`; Lakebase after deploy when runtime durability
-  is enabled; process-local after deploy when disabled.
+- Invocation state/events: in-memory in `mason dev`; Runtime Store after deployment.
 - Conversation checkpoints: in-process by default; managed Session Store when bound.
 - Long-term memory: managed Memory Store when bound.
-- LangGraph HITL: checkpointed with the conversation and durable when Session Store is bound.
+- LangGraph HITL: checkpointed with the conversation and persisted when Session Store is bound.
 - Recovery: continue a checkpoint tagged with the current invocation ID; otherwise replay input.
 
-Every framework event must pass through `context.emit()` before delivery. Checkpoints use
+The Runtime adapter sends every framework event through `context.emit()` before delivery. Checkpoints use
 `durability="sync"` so acknowledged progress is available to a replacement worker. External side
 effects remain at-least-once; tools must be idempotent.
 
