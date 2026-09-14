@@ -80,7 +80,7 @@ def wrap_api_error(exc: Exception) -> AgentCliError:
     """
     # When the SDK exhausts its retry budget it raises a TimeoutError chaining the last underlying
     # error as __cause__; surface that original service error, not the generic retry wrapper.
-    if isinstance(exc, TimeoutError) and exc.__cause__ is not None:
+    if isinstance(exc, TimeoutError) and isinstance(exc.__cause__, Exception):
         exc = exc.__cause__
     error_code = getattr(exc, "error_code", None)
     # A message-less DatabricksError wraps `IOError(None)`, so `str(exc)` is the literal
