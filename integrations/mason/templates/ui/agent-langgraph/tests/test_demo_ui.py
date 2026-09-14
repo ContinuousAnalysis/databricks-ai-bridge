@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from runtime import ui
 
 from databricks_mason import AgentApp
-from databricks_mason.runtime.durability.store import InMemoryDurabilityStore
+from databricks_mason.runtime.store import InMemoryRuntimeStore
 
 
 class _FakeStateClient:
@@ -102,9 +102,9 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     async def invoke_handler(request, context):
         return {"output": [], "session_id": context.session_id}
 
-    app = AgentApp(durable_runtime=True, durability_store=InMemoryDurabilityStore())
+    app = AgentApp(runtime_store=InMemoryRuntimeStore())
     app.invoke(invoke_handler)
-    app.on_recovery(invoke_handler)
+    app.recover(invoke_handler)
     ui.install_ui(app)
     client = TestClient(app, base_url="https://testserver")
     client.cookies.set("__Host-databricks-app-router", session_id)
@@ -149,10 +149,10 @@ def test_demo_ui_routes(monkeypatch):
     }
     assert config["streaming"]["enabled"] is True
     assert config["background"]["enabled"] is True
-    assert config["streaming"]["durable"] is False
-    assert config["streaming"]["mode"] == "In-process run store"
-    assert config["background"]["durable"] is False
-    assert config["background"]["mode"] == "In-process run store"
+    assert config["streaming"]["persistent"] is False
+    assert config["streaming"]["mode"] == "In-process Runtime Store"
+    assert config["background"]["persistent"] is False
+    assert config["background"]["mode"] == "In-process Runtime Store"
     assert config["memory"]["enabled"] is False
     assert config["session"]["managed"] is False
     assert config["session"]["history"] is True
@@ -160,10 +160,10 @@ def test_demo_ui_routes(monkeypatch):
     assert "recovery" not in config
     assert client.get("/api/demo/config").status_code == 404
 
-    client.app.run_store_durable = True
+    client.app.runtime_store_persistent = True
     durable_config = client.get("/api/ui/config").json()
-    assert durable_config["streaming"]["mode"] == "Durable run store"
-    assert durable_config["background"]["mode"] == "Durable run store"
+    assert durable_config["streaming"]["mode"] == "Runtime Store"
+    assert durable_config["background"]["mode"] == "Runtime Store"
 
     assert client.get("/api/demo/models").json() == {
         "default": "databricks-gpt-5-2",

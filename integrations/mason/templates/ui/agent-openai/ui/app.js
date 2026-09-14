@@ -779,14 +779,14 @@ async function loadConfig() {
       elements.streamingStatus,
       config.streaming.enabled,
       config.streaming.enabled
-        ? `Streaming responses over ${config.streaming.transport} use the ${config.streaming.durable ? "durable" : "in-process"} run store.`
+        ? `Streaming responses over ${config.streaming.transport} use ${config.streaming.persistent ? "the Runtime Store." : "an in-process Runtime Store."}`
         : "Streaming is disabled for this deployment.",
     );
     setCapability(
       elements.backgroundStatus,
       config.background.enabled,
       config.background.enabled
-        ? `Background invocations use a ${config.background.durable ? "durable" : "in-process"} run store.`
+        ? `Background invocations use ${config.background.persistent ? "the Runtime Store." : "an in-process Runtime Store."}`
         : "Background invocations are disabled.",
     );
     setCapability(

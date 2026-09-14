@@ -1,4 +1,4 @@
-"""Lakebase persistence for durable request execution."""
+"""Runtime Store implementations for managed request execution."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from sqlalchemy import URL, event, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from databricks_mason.lakebase_durability_store import get_lakebase_schema
+from databricks_mason.runtime.durability.lakebase_store import get_lakebase_schema
 from databricks_mason.runtime.durability.types import (
     DurabilityStore,
     DurableEvent,
@@ -38,7 +38,9 @@ class _AsyncLakebase(Protocol):
     async def create_schema(self) -> None: ...
 
 
-DEFAULT_DURABILITY_SCHEMA = "databricks_mason_runtime"
+DEFAULT_RUNTIME_SCHEMA = "databricks_mason_runtime"
+# Compatibility alias for code generated before the Runtime Store terminology was adopted.
+DEFAULT_DURABILITY_SCHEMA = DEFAULT_RUNTIME_SCHEMA
 RUNTIME_ENDPOINT_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
 RUNTIME_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
 RUNTIME_LOCAL_ENV = "DATABRICKS_MASON_RUNTIME_LOCAL"
@@ -132,7 +134,7 @@ class _AppsPostgresLakebase:
             return token
 
 
-class LakebaseDurabilityStore:
+class LakebaseRuntimeStore:
     """Persist shared execution state, attempt leases, and ordered events in Lakebase.
 
     The ``executions`` table is the source of truth for idempotency and lifecycle state. Conditional
@@ -142,8 +144,8 @@ class LakebaseDurabilityStore:
     next attempt, and continue after process or pod loss.
 
     This store requires a Lakebase Postgres database. ``mason deploy`` reuses or provisions a
-    dedicated app-owned durability project, then assigns the app its own schema. ``mason dev`` uses
-    ``InMemoryDurabilityStore`` instead.
+    dedicated app-owned database, then assigns the app its own schema. ``mason dev`` uses
+    ``InMemoryRuntimeStore`` instead.
     """
 
     def __init__(
@@ -153,7 +155,7 @@ class LakebaseDurabilityStore:
         project: str | None = None,
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
-        schema: str = DEFAULT_DURABILITY_SCHEMA,
+        schema: str = DEFAULT_RUNTIME_SCHEMA,
         lakebase: _AsyncLakebase | None = None,
     ) -> None:
         if not _SCHEMA_NAME.fullmatch(schema):
@@ -193,8 +195,8 @@ class LakebaseDurabilityStore:
         username: str | None = None,
         sslmode: str | None = None,
         workspace_client: WorkspaceClient | None = None,
-        schema: str = DEFAULT_DURABILITY_SCHEMA,
-    ) -> "LakebaseDurabilityStore":
+        schema: str = DEFAULT_RUNTIME_SCHEMA,
+    ) -> "LakebaseRuntimeStore":
         """Use connection coordinates injected for a Databricks Apps Postgres resource."""
         if not _SCHEMA_NAME.fullmatch(schema):
             raise ValueError(f"invalid durability schema name: {schema!r}")
@@ -597,7 +599,7 @@ class LakebaseDurabilityStore:
         )
 
 
-class InMemoryDurabilityStore:
+class InMemoryRuntimeStore:
     """Process-local durability store for development and tests."""
 
     def __init__(self) -> None:
@@ -768,16 +770,24 @@ class InMemoryDurabilityStore:
         return datetime.now(timezone.utc) - heartbeat_at >= timedelta(seconds=stale_seconds)
 
 
-def default_durability_store() -> DurabilityStore:
+RuntimeStore = DurabilityStore
+
+# Compatibility aliases for projects generated before the Runtime Store terminology was adopted.
+LakebaseDurabilityStore = LakebaseRuntimeStore
+InMemoryDurabilityStore = InMemoryRuntimeStore
+
+
+def default_runtime_store() -> RuntimeStore:
     """Use the attached Lakebase resource when deployed, otherwise process-local state."""
     if os.getenv(RUNTIME_LOCAL_ENV, "").lower() == "true":
-        return InMemoryDurabilityStore()
+        return InMemoryRuntimeStore()
     app_name = os.getenv("DATABRICKS_APP_NAME")
     if not app_name:
-        return InMemoryDurabilityStore()
+        return InMemoryRuntimeStore()
     if endpoint := os.getenv(RUNTIME_ENDPOINT_ENV):
         schema = os.getenv(RUNTIME_SCHEMA_ENV) or get_lakebase_schema(app_name)
-        return LakebaseDurabilityStore.from_app_resource(endpoint=endpoint, schema=schema)
-    raise RuntimeError(
-        f"{RUNTIME_ENDPOINT_ENV} is required for durable execution in Databricks Apps"
-    )
+        return LakebaseRuntimeStore.from_app_resource(endpoint=endpoint, schema=schema)
+    raise RuntimeError(f"{RUNTIME_ENDPOINT_ENV} is required for Mason Runtime in Databricks Apps")
+
+
+default_durability_store = default_runtime_store

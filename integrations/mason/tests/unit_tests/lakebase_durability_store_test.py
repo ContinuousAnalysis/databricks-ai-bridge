@@ -1,12 +1,12 @@
-"""Tests for durability Lakebase selection and fallback provisioning."""
+"""Tests for Runtime Store Lakebase selection and fallback provisioning."""
 
 import json
 import types
 
 import pytest
 
-from databricks_mason import lakebase_durability_store as durability
 from databricks_mason.errors import AgentCliError
+from databricks_mason.runtime.durability import lakebase_store as durability
 
 
 def test_backend_uses_one_deterministic_autoscaling_project() -> None:
@@ -56,7 +56,7 @@ def test_get_or_create_backend_creates_missing_project(monkeypatch) -> None:
     create = calls[1]
     assert create[:3] == ["postgres", "create-project", "mason-app-durability"]
     payload = json.loads(create[create.index("--json") + 1])
-    assert payload["spec"]["display_name"] == "Mason durability for mason-app"
+    assert payload["spec"]["display_name"] == "Mason Runtime Store for mason-app"
 
 
 def test_get_or_create_backend_respects_no_create_stores(monkeypatch) -> None:

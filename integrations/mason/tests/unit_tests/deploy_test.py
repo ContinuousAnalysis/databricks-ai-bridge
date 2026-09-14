@@ -147,7 +147,6 @@ def _mark_template(source: pathlib.Path, template: str) -> None:
 def _write_agent_manifest(
     source: pathlib.Path,
     *,
-    durability: bool = False,
     memory: str | None = None,
     session: str | None = None,
 ) -> None:
@@ -156,8 +155,6 @@ def _write_agent_manifest(
         body += f'\n[memory_store]\nname = "{memory}"\n'
     if session:
         body += f'\n[session_store]\nname = "{session}"\n'
-    if durability:
-        body += "\n[durability]\nenabled = true\n"
     (source / "agent.toml").write_text(body)
 
 
@@ -382,7 +379,7 @@ def test_deploy_help_exposes_instances_and_sticky_routing():
     assert "Databricks Apps instances" not in result.output
 
 
-def test_deploy_non_durable_template_does_not_enable_runtime_store(
+def test_deploy_mason_template_provisions_runtime_store(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     src = tmp_path / "app"
@@ -393,10 +390,11 @@ def test_deploy_non_durable_template_does_not_enable_runtime_store(
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
-        deploy_mod.lakebase_durability_store,
+        deploy_mod.lakebase_store,
         "get_or_create_backend",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not provision")),
+        lambda app, *args, **kwargs: deploy_mod.lakebase_store.backend(app),
     )
+    monkeypatch.setattr(deploy_mod, "apply_postgres_resources", lambda *args, **kwargs: None)
     deployed_env = None
 
     def fake_databricks(args, profile, **kwargs):
@@ -419,30 +417,10 @@ def test_deploy_non_durable_template_does_not_enable_runtime_store(
         entry["name"]: entry["value"]
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
-    assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in env
+    assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" in env
     assert deployed_env is not None
-    assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in deployed_env
-    assert "DATABRICKS_MASON_RUNTIME_SCHEMA" not in deployed_env
-
-
-def test_deploy_rejects_invalid_project_instead_of_silently_skipping_durability(
-    tmp_path: pathlib.Path,
-) -> None:
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    (src / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "langgraph"\n\n[durability]\nenabled = "yes"\n'
-    )
-
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src)],
-        obj=_FakeCtx(),
-    )
-
-    assert result.exit_code != 0
-    assert "enabled = true or false" in result.output
+    assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" in deployed_env
+    assert "DATABRICKS_MASON_RUNTIME_SCHEMA" in deployed_env
 
 
 def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
@@ -451,13 +429,14 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_agent_manifest(src, durability=True, session="sessions")
-    selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
+    _mark_template(src, "agent-langgraph")
+    _write_agent_manifest(src, session="sessions")
+    selected = deploy_mod.lakebase_store.backend("mason-myapp")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
-        deploy_mod.lakebase_durability_store,
+        deploy_mod.lakebase_store,
         "get_or_create_backend",
         lambda app, profile, create: selected,
     )
@@ -492,7 +471,7 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
     assert (
         backend.resource_name == "postgres-durability"
     )  # distinct from a session store's resource
-    assert backend.schema == deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
+    assert backend.schema == deploy_mod.lakebase_store.get_lakebase_schema("mason-myapp")
     assert backend.tables == ()
     deployed_env = events[1][1]
     assert deployed_env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
@@ -503,7 +482,7 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
     }
     assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
     assert env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == (
-        deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
+        deploy_mod.lakebase_store.get_lakebase_schema("mason-myapp")
     )
 
 
@@ -513,13 +492,14 @@ def test_deploy_durability_binding_does_not_reuse_memory_store(
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_agent_manifest(src, durability=True, memory="mem")
-    selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
+    _mark_template(src, "agent-langgraph")
+    _write_agent_manifest(src, memory="mem")
+    selected = deploy_mod.lakebase_store.backend("mason-myapp")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
-        deploy_mod.lakebase_durability_store,
+        deploy_mod.lakebase_store,
         "get_or_create_backend",
         lambda app, profile, create: selected,
     )

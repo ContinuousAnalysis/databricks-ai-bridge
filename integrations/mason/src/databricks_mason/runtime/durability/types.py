@@ -5,7 +5,7 @@
 claims and executes it. The store returns ``DurableExecution`` snapshots and ordered
 ``DurableEvent`` records. Each executor call receives a ``DurableExecutionContext`` for attempt
 fencing and event emission. ``AgentApp`` adapts that lower-level context into
-``DurableAgentContext`` for functions registered with ``@app.invoke`` and ``@app.on_recovery``.
+``InvocationContext`` for functions registered with ``@app.invoke`` and ``@app.recover``.
 
 All request, response, and event payloads use the recursive ``JsonValue`` / ``JsonObject`` aliases,
 so values crossing the durability boundary can be persisted identically by in-memory and Lakebase
@@ -86,8 +86,8 @@ DurableExecutorFn = Callable[[JsonValue, DurableExecutionContext], Awaitable[Jso
 
 
 @dataclass(frozen=True)
-class DurableAgentContext:
-    """Invocation/session metadata and durable event emission for a decorated agent function."""
+class InvocationContext:
+    """Invocation/session metadata and event emission for a Mason Runtime hook."""
 
     invocation_id: str
     session_id: str
@@ -96,7 +96,7 @@ class DurableAgentContext:
 
     @property
     def is_recovery(self) -> bool:
-        """Whether ``@app.on_recovery`` is handling a replacement attempt."""
+        """Whether ``@app.recover`` is handling a replacement attempt."""
         return self.attempt > 1
 
     async def emit(self, event: JsonObject) -> int:
@@ -104,7 +104,11 @@ class DurableAgentContext:
         return await self._execution_context.emit(event)
 
 
-DurableAgentHook = Callable[[JsonValue, DurableAgentContext], Awaitable[JsonValue]]
+InvocationHook = Callable[[JsonValue, InvocationContext], Awaitable[JsonValue]]
+
+# Compatibility aliases for projects generated before the Runtime Store terminology was adopted.
+DurableAgentContext = InvocationContext
+DurableAgentHook = InvocationHook
 
 
 class DurabilityStore(Protocol):

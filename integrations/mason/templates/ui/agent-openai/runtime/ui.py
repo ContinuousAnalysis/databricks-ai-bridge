@@ -371,8 +371,8 @@ def install_ui(app: FastAPI) -> None:
         memory_store = _memory_store()
         session_store = _session_store()
         default_model = _default_model()
-        run_store_durable = bool(getattr(app, "run_store_durable", False))
-        run_store_mode = "Durable run store" if run_store_durable else "In-process run store"
+        runtime_store_persistent = bool(getattr(app, "runtime_store_persistent", False))
+        runtime_store_mode = "Runtime Store" if runtime_store_persistent else "In-process Runtime Store"
         return {
             "session_id": _request_session_id(request),
             "instance_id": _INSTANCE_ID,
@@ -382,13 +382,13 @@ def install_ui(app: FastAPI) -> None:
             "streaming": {
                 "enabled": True,
                 "transport": "Server-sent events",
-                "durable": run_store_durable,
-                "mode": run_store_mode,
+                "persistent": runtime_store_persistent,
+                "mode": runtime_store_mode,
             },
             "background": {
                 "enabled": True,
-                "durable": run_store_durable,
-                "mode": run_store_mode,
+                "persistent": runtime_store_persistent,
+                "mode": runtime_store_mode,
             },
             "session": {
                 "durable": bool(session_store),

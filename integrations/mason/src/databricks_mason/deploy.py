@@ -2,7 +2,7 @@
 
 `mason deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
-the deployment. Durable agents use a dedicated, app-owned Lakebase project. The managed stores
+the deployment. Mason Runtime deployments receive an app-owned Runtime Store. The managed stores
 are read from `agent.toml` at runtime, so they are not written into `app.yaml`. `mason deployments`
 covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
@@ -23,7 +23,6 @@ import click
 import yaml
 
 from databricks_mason import (
-    lakebase_durability_store,
     render,
     timefmt,
 )
@@ -33,8 +32,13 @@ from databricks_mason.app_resources import (
 )
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
-from databricks_mason.project_config import require_managed_tool_support
+from databricks_mason.project_config import (
+    is_custom_server_template,
+    load_project_metadata,
+    require_managed_tool_support,
+)
 from databricks_mason.render import field
+from databricks_mason.runtime.durability import lakebase_store
 from databricks_mason.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
@@ -43,8 +47,8 @@ from databricks_mason.tracing import (
     experiment_url,
 )
 
-_AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
-_AGENT_DURABILITY_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
+_RUNTIME_STORE_ENDPOINT_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
+_RUNTIME_STORE_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
 # until the proxy is reachable from the build sandbox again, then drop this default. pip reads
@@ -533,16 +537,25 @@ def deploy(
             experiment_url(client.host, trace_experiment_id) or trace_experiment_id
         )
 
-    durability_backend = None
-    durability_enabled = bool(project and project.durability_enabled)
-    if durability_enabled:
-        durability_schema = lakebase_durability_store.get_lakebase_schema(name)
-        durability_backend = lakebase_durability_store.get_or_create_backend(
-            name, obj.profile, create=True
-        )
-        env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
-        env_updates[_AGENT_DURABILITY_SCHEMA_ENV] = durability_schema
-        provisioned["Agent durability store"] = durability_backend.database_path
+    runtime_backend = None
+    is_mason_runtime = False
+    if project is not None:
+        try:
+            is_mason_runtime = not is_custom_server_template(
+                load_project_metadata(source_dir).template
+            )
+        except AgentCliError:
+            # Metadata-less projects may use a custom server. Do not attach an unused Runtime
+            # Store unless the project explicitly came from a Mason server template.
+            is_mason_runtime = False
+    if is_mason_runtime:
+        # TODO: Replace this temporary direct Lakebase provisioning path with the Conversation Store
+        # POST /api/2.0/agents/runtime-stores API once that backend contract is available.
+        durability_schema = lakebase_store.get_lakebase_schema(name)
+        runtime_backend = lakebase_store.get_or_create_backend(name, obj.profile, create=True)
+        env_updates[_RUNTIME_STORE_ENDPOINT_ENV] = runtime_backend.endpoint_path
+        env_updates[_RUNTIME_STORE_SCHEMA_ENV] = durability_schema
+        provisioned["Runtime Store"] = runtime_backend.database_path
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
@@ -595,11 +608,11 @@ def deploy(
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
 
-    if durability_backend is not None:
-        resource_error = apply_postgres_resources(name, [durability_backend], obj.profile)
+    if runtime_backend is not None:
+        resource_error = apply_postgres_resources(name, [runtime_backend], obj.profile)
         if resource_error:
             raise AgentCliError(
-                "Could not attach the Lakebase resource required for durable execution.",
+                "Could not attach the Lakebase resource required for the Runtime Store.",
                 hint=resource_error,
             )
 

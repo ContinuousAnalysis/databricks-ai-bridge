@@ -7,7 +7,7 @@ import types
 from typing import Any
 
 from databricks_mason import app_resources as sa
-from databricks_mason import lakebase_durability_store
+from databricks_mason.runtime.durability import lakebase_store
 
 
 def _backend(database: str, resource_name: str) -> sa.LakebaseBackend:
@@ -91,7 +91,7 @@ def test_durability_resource_coexists_with_a_second_managed_resource(monkeypatch
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
-    durability = lakebase_durability_store.backend("mason-app")
+    durability = lakebase_store.backend("mason-app")
     other = _backend("other", "postgres-other")
 
     assert sa.apply_postgres_resources("app", [durability], "prof") is None

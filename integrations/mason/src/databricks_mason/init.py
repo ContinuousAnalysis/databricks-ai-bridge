@@ -4,8 +4,8 @@ Fetches one template directory out of its git repo (a sparse, blobless clone so 
 chosen template is materialized) and drops it into a local target directory, ready for
 `mason deploy --source <dir>`.
 
-The Mason server is durable by default. Pass `--no-durable-runtime` for process-local background
-state, or `--server custom` for a minimal foreground-only FastAPI server. `--repo` / `--ref`
+The Mason server provisions its Runtime Store at deployment. Use `--server custom` for a minimal
+foreground-only FastAPI server. `--repo` / `--ref`
 override the source, e.g. to pull from a fork or branch before a template has merged.
 """
 
@@ -302,12 +302,6 @@ def _pin_mason_source(
     help="Use Mason's invocation server or a minimal custom FastAPI server.",
 )
 @click.option(
-    "--no-durable-runtime",
-    is_flag=True,
-    hidden=True,
-    help="Keep Mason server background state in-process instead of provisioning Lakebase.",
-)
-@click.option(
     "--profile",
     default=None,
     help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `mason dev` works "
@@ -332,7 +326,6 @@ def init(
     directory: Optional[str],
     framework: Optional[str],
     server: str,
-    no_durable_runtime: bool,
     profile: Optional[str],
     disable_chat_app: bool,
     enable_chat_app: bool,
@@ -349,14 +342,11 @@ def init(
     scaffolded project runs with `mason dev` right away.
 
     The default Mason server supports foreground, streaming, and background invocations through one
-    HTTP contract with a durable runtime. Pass --server custom for a minimal foreground-only
+    HTTP contract and Runtime Store. Pass --server custom for a minimal foreground-only
     FastAPI server.
     """
     selected_framework = framework or "langgraph"
     mason_server = server == "mason"
-    if not mason_server and no_durable_runtime:
-        raise click.UsageError("--no-durable-runtime only applies to --server mason")
-    durable_runtime = mason_server and not no_durable_runtime
     templates = _TEMPLATES if mason_server else _CUSTOM_SERVER_TEMPLATES
     spec = templates[selected_framework]
     chat_app_enabled = (
@@ -404,7 +394,6 @@ def init(
         project = AgentProject.create(
             dest,
             framework=selected_framework,
-            durability_enabled=durable_runtime,
         )
         project.write()
         env_profile = profile or obj.profile
@@ -422,7 +411,6 @@ def init(
                 "directory": str(dest),
                 "server": server,
                 "chat_app_enabled": chat_app_enabled,
-                "durable_runtime": durable_runtime,
                 "env_profile": env_profile if wrote_env else None,
             }
         )
@@ -433,7 +421,6 @@ def init(
         "Framework": selected_framework,
         "Server": "Mason AgentApp" if mason_server else "Custom FastAPI",
         "Template ref": template_ref,
-        "Durable runtime": "enabled" if durable_runtime else "disabled",
         "Directory": str(dest),
     }
     if chat_app_enabled:
