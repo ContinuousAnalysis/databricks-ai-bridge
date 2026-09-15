@@ -20,10 +20,16 @@ From source:
 pip install 'git+https://github.com/databricks/databricks-ai-bridge.git#subdirectory=integrations/mason'
 ```
 
-For the SDK-hosted Mason Runtime agent application, install the runtime extra:
+The CLI installation intentionally excludes HTTP-server and agent-framework dependencies.
+Mason-generated projects declare the correct runtime extra automatically. To add Mason Runtime to
+an existing agent, install the extra for its framework:
 
 ```sh
+# LangGraph
 pip install 'databricks-mason[runtime]'
+
+# OpenAI Agents SDK
+pip install 'databricks-mason[runtime-openai]'
 ```
 
 ## Shell completion
@@ -111,6 +117,9 @@ the existing CLI commands remain separate.
 `AgentApp` provides Mason's invocation HTTP contract, including foreground, streaming, background,
 polling, and event endpoints. `mason dev` uses process-local state; `mason deploy` attaches a
 Runtime Store for persistence, heartbeats, and crash recovery:
+
+See [Mason Runtime](RUNTIME.md) for the invocation API, streaming and background modes, Runtime
+Store lifecycle, and recovery semantics.
 
 ```python
 from databricks_mason import AgentApp, InvocationContext
