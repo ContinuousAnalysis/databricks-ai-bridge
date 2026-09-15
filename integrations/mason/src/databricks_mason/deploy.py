@@ -32,12 +32,11 @@ from databricks_mason.app_resources import (
     LakebaseBackend,
     apply_experiment_resource,
     apply_postgres_resources,
+    remove_app_resources,
 )
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import (
-    is_custom_server_template,
-    load_project_metadata,
     require_managed_tool_support,
 )
 from databricks_mason.render import field
@@ -174,8 +173,13 @@ def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -
 # --- app.yaml manifest handling ---------------------------------------------
 
 
-def _upsert_manifest_env(source: pathlib.Path, updates: dict[str, str]) -> bool:
-    """Inject/overwrite env entries in <source>/app.yaml. Returns True if it scaffolded a new file."""
+def _upsert_manifest_env(
+    source: pathlib.Path,
+    updates: dict[str, str],
+    *,
+    removals: frozenset[str] = frozenset(),
+) -> bool:
+    """Reconcile env entries in <source>/app.yaml. Returns True if it scaffolded a new file."""
     app_yaml = source / "app.yaml"
     if app_yaml.exists():
         loaded = yaml.safe_load(app_yaml.read_text())
@@ -186,9 +190,12 @@ def _upsert_manifest_env(source: pathlib.Path, updates: dict[str, str]) -> bool:
         scaffolded = True
 
     raw_env = doc.get("env")
-    env: list[dict[str, Any]] = (
-        [entry for entry in raw_env if isinstance(entry, dict)] if isinstance(raw_env, list) else []
-    )
+    candidates = raw_env if isinstance(raw_env, list) else []
+    env: list[dict[str, Any]] = [
+        entry
+        for entry in candidates
+        if isinstance(entry, dict) and entry.get("name") not in removals
+    ]
     by_name = {e.get("name"): e for e in env if isinstance(e, dict)}
     for name, value in updates.items():
         if name in by_name:
@@ -444,20 +451,11 @@ def _grant_store_access(
 
 def _reconcile_runtime_store(
     project,
-    source: pathlib.Path,
     deployment_name: str,
     profile: Optional[str],
 ) -> Optional[LakebaseBackend]:
     """Create or reuse the implicit Runtime Store for a Mason Runtime deployment."""
-    if project is None:
-        return None
-    try:
-        is_mason_runtime = not is_custom_server_template(load_project_metadata(source).template)
-    except AgentCliError:
-        # Metadata-less projects may use a custom server. Do not attach an unused Runtime Store
-        # unless the project explicitly came from a Mason server template.
-        return None
-    if not is_mason_runtime:
+    if project is None or project.server != "mason":
         return None
 
     # TODO: Replace this temporary direct Lakebase provisioning path with the Conversation Store
@@ -516,8 +514,8 @@ def deploy(
     `agent-mason-<name>` (Mason adds the prefix if absent); use that full name with the `mason
     deployments` commands. `deployments list` shows only apps carrying this prefix.
 
-    Any memory/session store declared in agent.toml (by `mason init` or `mason memory/sessions
-    bind`) is created if it doesn't exist yet; agent.toml itself is never modified for stores.
+    Any memory/session store declared in agent.toml (for example, by `mason memory/sessions bind`)
+    is created if it doesn't exist yet; agent.toml itself is never modified for stores.
 
     Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser
     session automatically stays on one instance.
@@ -529,7 +527,7 @@ def deploy(
     source_dir = pathlib.Path(source)
     project = _load_project(source_dir)
     if project is not None and project.tools:
-        require_managed_tool_support(source_dir)
+        require_managed_tool_support(project.server)
     base_name = _resolve_deployment_name(project, name)
     name = _prefixed_name(base_name)
     _validate_deployment_name(name)
@@ -575,11 +573,16 @@ def deploy(
     if session_store:
         env_updates[SESSION_STORE_ENV] = session_store
 
-    runtime_backend = _reconcile_runtime_store(project, source_dir, name, obj.profile)
+    runtime_backend = _reconcile_runtime_store(project, name, obj.profile)
+    runtime_env_removals = frozenset()
+    runtime_resource_names = frozenset()
     if runtime_backend is not None:
         env_updates[_RUNTIME_STORE_ENDPOINT_ENV] = runtime_backend.endpoint_path
         env_updates[_RUNTIME_STORE_SCHEMA_ENV] = runtime_backend.schema
         provisioned["Runtime Store"] = runtime_backend.database_path
+    elif project is not None and project.server == "custom":
+        runtime_env_removals = frozenset({_RUNTIME_STORE_ENDPOINT_ENV, _RUNTIME_STORE_SCHEMA_ENV})
+        runtime_resource_names = frozenset({lakebase_store.backend(name).resource_name})
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
@@ -589,8 +592,8 @@ def deploy(
 
     # 3. Patch the app.yaml manifest with the resolved store, trace, and index env vars.
     scaffolded = False
-    if env_updates:
-        scaffolded = _upsert_manifest_env(source_dir, env_updates)
+    if env_updates or runtime_env_removals:
+        scaffolded = _upsert_manifest_env(source_dir, env_updates, removals=runtime_env_removals)
 
     # 4. Ensure the Databricks App exists and its compute is active. Create only when the app is new
     #    (`apps create` errors on an existing app); the compute wait runs every deploy.
@@ -628,7 +631,6 @@ def deploy(
         click.echo((result.stdout or "").replace(old, new), nl=False)
     # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
     # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
-    # compute is already ACTIVE.
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
 
@@ -637,6 +639,13 @@ def deploy(
         if resource_error:
             raise AgentCliError(
                 "Could not attach the Lakebase resource required for the Runtime Store.",
+                hint=resource_error,
+            )
+    elif runtime_resource_names:
+        resource_error = remove_app_resources(name, runtime_resource_names, obj.profile)
+        if resource_error:
+            raise AgentCliError(
+                "Could not detach the Runtime Store from the custom server deployment.",
                 hint=resource_error,
             )
 

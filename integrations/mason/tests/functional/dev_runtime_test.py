@@ -17,7 +17,7 @@ def test_mason_dev_uses_in_memory_runtime_store_across_cli_processes(
     project = tmp_path / "agent"
     project.mkdir()
     (project / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "langgraph"\n\n[tracing]\ndisabled = true\n'
+        'schema_version = 1\n\n[agent]\nframework = "langgraph"\nserver = "mason"\n\n[tracing]\ndisabled = true\n'
     )
     probe = project / "probe.py"
     probe.write_text(
