@@ -18,7 +18,7 @@ from databricks_mason.runtime.durability.types import (
 )
 
 
-class MemoryDurabilityStore:
+class MemoryRuntimeStore:
     def __init__(self) -> None:
         self.states: dict[str, DurableExecution] = {}
         self.initialized = False
@@ -184,7 +184,7 @@ class MemoryDurabilityStore:
 def make_runtime(executor, store=None, **kwargs):
     return DurableRuntime(
         executor,
-        durability_store=store or MemoryDurabilityStore(),
+        runtime_store=store or MemoryRuntimeStore(),
         heartbeat_seconds=0.01,
         stale_seconds=0.05,
         scan_seconds=0.01,
@@ -201,7 +201,7 @@ async def test_invoke_persists_request_and_response():
         calls.append((request, context))
         return {"output": request["input"]}
 
-    store = MemoryDurabilityStore()
+    store = MemoryRuntimeStore()
     runtime = make_runtime(execute, store)
     await runtime.start()
     try:
@@ -262,7 +262,7 @@ async def test_stale_attempt_reuses_request_and_marks_recovery():
         contexts.append((request, context))
         return {"output": "recovered"}
 
-    store = MemoryDurabilityStore()
+    store = MemoryRuntimeStore()
     store.states["session-1"] = DurableExecution(
         execution_id="session-1",
         status=DurableExecutionStatus.ACTIVE,
@@ -335,7 +335,7 @@ async def test_wait_observes_response_completed_by_another_process():
         executor_called = True
         return {}
 
-    store = MemoryDurabilityStore()
+    store = MemoryRuntimeStore()
     store.states["session-1"] = DurableExecution(
         execution_id="session-1",
         status=DurableExecutionStatus.ACTIVE,
@@ -434,7 +434,7 @@ async def test_subclass_can_own_execution_wiring():
             return {"attempt": context.attempt, "input": request["input"]}
 
     runtime = Runtime(
-        durability_store=MemoryDurabilityStore(),
+        runtime_store=MemoryRuntimeStore(),
         heartbeat_seconds=0.01,
         stale_seconds=0.05,
         scan_seconds=0.01,
@@ -455,7 +455,7 @@ async def test_start_and_stop_manage_store_lifecycle():
     async def execute(request: dict, context: DurableExecutionContext) -> dict:
         return {}
 
-    store = MemoryDurabilityStore()
+    store = MemoryRuntimeStore()
     runtime = make_runtime(execute, store)
 
     await runtime.start()

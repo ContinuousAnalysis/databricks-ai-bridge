@@ -1,15 +1,14 @@
 """Public contracts shared by the durable runtime, store, and agent application.
 
 ``DurableRuntime`` accepts a ``DurableExecutorFn`` and coordinates its work through a
-``DurabilityStore``. Internally, ``RecoveryScheduler`` finds eligible work and ``AttemptRunner``
+``RuntimeStore``. Internally, ``RecoveryScheduler`` finds eligible work and ``AttemptRunner``
 claims and executes it. The store returns ``DurableExecution`` snapshots and ordered
 ``DurableEvent`` records. Each executor call receives a ``DurableExecutionContext`` for attempt
 fencing and event emission. ``AgentApp`` adapts that lower-level context into
-``DurableAgentContext`` for functions registered with ``@app.invoke`` and ``@app.on_recovery``.
+``InvocationContext`` for functions registered with ``@app.invoke`` and ``@app.recover``.
 
 All request, response, and event payloads use the recursive ``JsonValue`` / ``JsonObject`` aliases,
-so values crossing the durability boundary can be persisted identically by in-memory and Lakebase
-stores.
+so Runtime Store values can be persisted identically by in-memory and Lakebase implementations.
 """
 
 from collections.abc import Awaitable, Callable
@@ -24,7 +23,7 @@ DurableEventEmitter = Callable[[JsonObject], Awaitable[int]]
 
 
 class DurableExecutionStatus(str, Enum):
-    """Lifecycle states stored by the durability layer."""
+    """Lifecycle states stored by Mason Runtime."""
 
     QUEUED = "QUEUED"
     ACTIVE = "ACTIVE"
@@ -86,8 +85,8 @@ DurableExecutorFn = Callable[[JsonValue, DurableExecutionContext], Awaitable[Jso
 
 
 @dataclass(frozen=True)
-class DurableAgentContext:
-    """Invocation/session metadata and durable event emission for a decorated agent function."""
+class InvocationContext:
+    """Invocation/session metadata and event emission for a Mason Runtime hook."""
 
     invocation_id: str
     session_id: str
@@ -96,7 +95,7 @@ class DurableAgentContext:
 
     @property
     def is_recovery(self) -> bool:
-        """Whether ``@app.on_recovery`` is handling a replacement attempt."""
+        """Whether ``@app.recover`` is handling a replacement attempt."""
         return self.attempt > 1
 
     async def emit(self, event: JsonObject) -> int:
@@ -104,10 +103,10 @@ class DurableAgentContext:
         return await self._execution_context.emit(event)
 
 
-DurableAgentHook = Callable[[JsonValue, DurableAgentContext], Awaitable[JsonValue]]
+InvocationHook = Callable[[JsonValue, InvocationContext], Awaitable[JsonValue]]
 
 
-class DurabilityStore(Protocol):
+class RuntimeStore(Protocol):
     """Atomic persistence operations required by :class:`DurableRuntime`.
 
     Implementations fence every mutating attempt operation with ``execution_id`` and ``attempt``.

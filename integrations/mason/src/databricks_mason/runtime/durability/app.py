@@ -17,18 +17,18 @@ from pydantic import JsonValue as PydanticJsonValue
 
 from databricks_mason.runtime.durability.runtime import DurableRuntime
 from databricks_mason.runtime.durability.store import (
-    InMemoryDurabilityStore,
-    default_durability_store,
+    InMemoryRuntimeStore,
+    RuntimeStore,
+    default_runtime_store,
 )
 from databricks_mason.runtime.durability.types import (
-    DurabilityStore,
-    DurableAgentContext,
-    DurableAgentHook,
     DurableExecution,
     DurableExecutionContext,
     DurableExecutionFailedError,
     DurableExecutionStatus,
     DurableRequestConflictError,
+    InvocationContext,
+    InvocationHook,
     JsonObject,
     JsonValue,
 )
@@ -51,37 +51,29 @@ class _InvocationRequest(BaseModel):
 class AgentApp(FastAPI):
     """Expose agent handlers through Mason's invocation HTTP protocol.
 
-    The default runtime keeps background state and events in this process. Set
-    ``durable_runtime=True`` to use Mason's deployed Lakebase store, heartbeats, and crash recovery.
+    The app uses a process-local Runtime Store locally and the Runtime Store attached by Mason
+    deployment in Databricks Apps. Add arbitrary FastAPI routes alongside the invocation API.
     """
 
     def __init__(
         self,
         *,
-        durable_runtime: bool = False,
-        durability_store: DurabilityStore | None = None,
+        runtime_store: RuntimeStore | None = None,
     ) -> None:
-        self.durable_runtime = durable_runtime
-        self._invoke_hook: DurableAgentHook | None = None
-        self._on_recovery_hook: DurableAgentHook | None = None
-        store = durability_store
-        if store is None:
-            store = default_durability_store() if durable_runtime else InMemoryDurabilityStore()
+        self._invoke_hook: InvocationHook | None = None
+        self._recover_hook: InvocationHook | None = None
+        store = runtime_store or default_runtime_store()
+        self.runtime_store_persistent = not isinstance(store, InMemoryRuntimeStore)
         self._runtime = DurableRuntime(
             self._execute,
-            durability_store=store,
+            runtime_store=store,
         )
 
         @asynccontextmanager
         async def lifespan(_: FastAPI):
             if self._invoke_hook is None:
                 raise RuntimeError("register an invocation handler with @app.invoke")
-            recover = self.durable_runtime and self._on_recovery_hook is not None
-            if self.durable_runtime and not recover:
-                logger.warning(
-                    "No @app.on_recovery handler is registered; automatic crash recovery is "
-                    "disabled."
-                )
+            recover = self._recover_hook is not None
             await self._runtime.start(recover=recover)
             try:
                 yield
@@ -104,18 +96,18 @@ class AgentApp(FastAPI):
             methods=["GET"],
         )
 
-    def invoke(self, function: DurableAgentHook) -> DurableAgentHook:
+    def invoke(self, function: InvocationHook) -> InvocationHook:
         """Register the handler for an invocation's first attempt."""
         if self._invoke_hook is not None:
             raise ValueError("an invocation handler is already registered")
         self._invoke_hook = function
         return function
 
-    def on_recovery(self, function: DurableAgentHook) -> DurableAgentHook:
+    def recover(self, function: InvocationHook) -> InvocationHook:
         """Register the handler used after an interrupted attempt becomes stale."""
-        if self._on_recovery_hook is not None:
+        if self._recover_hook is not None:
             raise ValueError("a recovery handler is already registered")
-        self._on_recovery_hook = function
+        self._recover_hook = function
         return function
 
     async def _bind_session(self, request: Request, call_next) -> Response:
@@ -136,15 +128,15 @@ class AgentApp(FastAPI):
         if not isinstance(session_id, str) or "input" not in execution_request:
             raise TypeError("execution request must contain session_id and input")
 
-        context = DurableAgentContext(
+        context = InvocationContext(
             invocation_id=execution_context.execution_id,
             session_id=session_id,
             attempt=execution_context.attempt,
             _execution_context=execution_context,
         )
-        function = self._on_recovery_hook if context.is_recovery else self._invoke_hook
+        function = self._recover_hook if context.is_recovery else self._invoke_hook
         if function is None:
-            handler = "@app.on_recovery" if context.is_recovery else "@app.invoke"
+            handler = "@app.recover" if context.is_recovery else "@app.invoke"
             raise RuntimeError(f"no {handler} handler is registered")
         return await function(copy.deepcopy(execution_request["input"]), context)
 

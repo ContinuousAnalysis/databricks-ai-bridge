@@ -9,11 +9,11 @@ import logging
 from typing import cast
 
 from databricks_mason.runtime.durability.types import (
-    DurabilityStore,
     DurableExecutionContext,
     DurableExecutorFn,
     JsonObject,
     JsonValue,
+    RuntimeStore,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ class AttemptRunner:
         self,
         execute_fn: DurableExecutorFn,
         *,
-        durability_store: DurabilityStore,
+        runtime_store: RuntimeStore,
         heartbeat_seconds: float,
         stale_seconds: float,
     ) -> None:
@@ -50,14 +50,14 @@ class AttemptRunner:
         if stale_seconds <= heartbeat_seconds:
             raise ValueError("stale_seconds must be greater than heartbeat_seconds")
         self._execute_fn = execute_fn
-        self._durability_store = durability_store
+        self._runtime_store = runtime_store
         self._heartbeat_seconds = heartbeat_seconds
         self._stale_seconds = stale_seconds
 
     async def run(self, execution_id: str) -> None:
         """Claim and run one eligible attempt, if this worker wins ownership."""
         try:
-            claimed = await self._durability_store.claim(execution_id, self._stale_seconds)
+            claimed = await self._runtime_store.claim(execution_id, self._stale_seconds)
         except Exception:
             logger.exception("Failed to claim durable execution: %s", execution_id)
             return
@@ -71,7 +71,7 @@ class AttemptRunner:
         try:
 
             async def emit(event: JsonObject) -> int:
-                sequence_number = await self._durability_store.append_event(
+                sequence_number = await self._runtime_store.append_event(
                     execution_id,
                     claimed.attempt,
                     _copy_json_object(event, "event"),
@@ -91,14 +91,14 @@ class AttemptRunner:
                 ),
             )
             response = copy_json_value(response, "executor response")
-            completed = await self._durability_store.complete(
+            completed = await self._runtime_store.complete(
                 execution_id,
                 claimed.attempt,
                 response,
             )
             if not completed:
                 logger.info(
-                    "Skipped completion after durability ownership changed: %s attempt=%d",
+                    "Skipped completion after Runtime Store ownership changed: %s attempt=%d",
                     execution_id,
                     claimed.attempt,
                 )
@@ -111,7 +111,7 @@ class AttemptRunner:
                 claimed.attempt,
             )
             try:
-                await self._durability_store.fail(execution_id, claimed.attempt)
+                await self._runtime_store.fail(execution_id, claimed.attempt)
             except Exception:
                 logger.exception(
                     "Failed to persist durable failure: %s attempt=%d",
@@ -125,7 +125,7 @@ class AttemptRunner:
     async def _heartbeat_loop(self, execution_id: str, attempt: int) -> None:
         while True:
             try:
-                owns_attempt = await self._durability_store.heartbeat(execution_id, attempt)
+                owns_attempt = await self._runtime_store.heartbeat(execution_id, attempt)
             except Exception:
                 logger.warning(
                     "Durable heartbeat failed: %s attempt=%d",

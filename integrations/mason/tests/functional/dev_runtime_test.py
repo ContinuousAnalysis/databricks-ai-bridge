@@ -1,4 +1,4 @@
-"""Cross-process regression test for ``mason dev`` local durability selection."""
+"""Cross-process regression test for ``mason dev`` Runtime Store selection."""
 
 from __future__ import annotations
 
@@ -11,27 +11,23 @@ import sys
 import yaml
 
 
-def test_mason_dev_uses_in_memory_durability_across_cli_processes(
+def test_mason_dev_uses_in_memory_runtime_store_across_cli_processes(
     tmp_path: pathlib.Path,
 ) -> None:
     project = tmp_path / "agent"
     project.mkdir()
     (project / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "langgraph"\n\n'
-        "[durability]\nenabled = true\n\n[tracing]\ndisabled = true\n"
+        'schema_version = 1\n\n[agent]\nframework = "langgraph"\n\n[tracing]\ndisabled = true\n'
     )
     probe = project / "probe.py"
     probe.write_text(
         "import os\n"
         "from databricks_mason import AgentApp\n"
-        "from databricks_mason.agent_project import AgentProject\n"
-        "enabled = AgentProject.load().durability_enabled\n"
-        "app = AgentApp(durable_runtime=enabled)\n"
-        "assert enabled is True\n"
+        "app = AgentApp()\n"
         "assert os.environ['DATABRICKS_MASON_RUNTIME_LOCAL'] == 'true'\n"
         "assert 'DATABRICKS_MASON_RUNTIME_ENDPOINT' not in os.environ\n"
-        "assert type(app._runtime.durability_store).__name__ == 'InMemoryDurabilityStore'\n"
-        "print('local durable runtime: InMemoryDurabilityStore')\n"
+        "assert type(app._runtime.runtime_store).__name__ == 'InMemoryRuntimeStore'\n"
+        "print('local Runtime Store: InMemoryRuntimeStore')\n"
     )
     original_manifest = {
         "command": [sys.executable, str(probe)],
@@ -80,6 +76,6 @@ def test_mason_dev_uses_in_memory_durability_across_cli_processes(
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "local durable runtime: InMemoryDurabilityStore" in result.stdout
+    assert "local Runtime Store: InMemoryRuntimeStore" in result.stdout
     assert yaml.safe_load(app_yaml.read_text()) == original_manifest
     assert not (project / "app.masondev.yaml").exists()

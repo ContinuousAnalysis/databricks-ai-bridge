@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 
 from databricks_mason.runtime.durability.attempt import AttemptRunner
 from databricks_mason.runtime.durability.types import (
-    DurabilityStore,
     DurableExecution,
     DurableExecutionStatus,
+    RuntimeStore,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,14 +23,14 @@ class RecoveryScheduler:
         self,
         attempt_runner: AttemptRunner,
         *,
-        durability_store: DurabilityStore,
+        runtime_store: RuntimeStore,
         stale_seconds: float,
         scan_seconds: float,
     ) -> None:
         if scan_seconds <= 0:
             raise ValueError("scan_seconds must be positive")
         self._attempt_runner = attempt_runner
-        self._durability_store = durability_store
+        self._runtime_store = runtime_store
         self._stale_seconds = stale_seconds
         self._scan_seconds = scan_seconds
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -92,11 +92,11 @@ class RecoveryScheduler:
     async def _scan_loop(self) -> None:
         while True:
             try:
-                execution_ids = await self._durability_store.recoverable_execution_ids(
+                execution_ids = await self._runtime_store.recoverable_execution_ids(
                     self._stale_seconds
                 )
                 for execution_id in execution_ids:
-                    state = await self._durability_store.get(execution_id)
+                    state = await self._runtime_store.get(execution_id)
                     if state is not None:
                         self.ensure_scheduled(state)
             except asyncio.CancelledError:

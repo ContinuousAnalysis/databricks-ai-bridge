@@ -8,7 +8,6 @@ import copy
 from databricks_mason.runtime.durability.attempt import AttemptRunner, copy_json_value
 from databricks_mason.runtime.durability.recovery import RecoveryScheduler
 from databricks_mason.runtime.durability.types import (
-    DurabilityStore,
     DurableEvent,
     DurableExecution,
     DurableExecutionContext,
@@ -17,20 +16,21 @@ from databricks_mason.runtime.durability.types import (
     DurableExecutionStatus,
     DurableExecutorFn,
     JsonValue,
+    RuntimeStore,
 )
 
 
 class DurableRuntime:
     """Coordinate idempotent execution, leases, recovery, and event replay.
 
-    ``submit`` first records an immutable request in the configured ``DurabilityStore``. The
+    ``submit`` first records an immutable request in the configured ``RuntimeStore``. The
     ``RecoveryScheduler`` schedules eligible work, and ``AttemptRunner`` atomically claims one
     attempt, runs ``execute_fn``, and refreshes its heartbeat until output or failure is committed.
     When recovery is enabled, the scheduler also reclaims active work whose heartbeat has become
     stale. Attempt numbers fence late writes from replaced workers, while persisted events let
     clients replay progress across processes.
 
-    Durability depends on the configured store: Mason uses process-local memory during development
+    Persistence depends on the configured store: Mason uses process-local memory during development
     and Lakebase in deployed Apps. This runtime persists execution state only; the executor remains
     responsible for agent checkpoints and idempotent external side effects.
     """
@@ -39,7 +39,7 @@ class DurableRuntime:
         self,
         execute_fn: DurableExecutorFn | None = None,
         *,
-        durability_store: DurabilityStore,
+        runtime_store: RuntimeStore,
         heartbeat_seconds: float = 3.0,
         stale_seconds: float = 10.0,
         scan_seconds: float = 3.0,
@@ -49,20 +49,20 @@ class DurableRuntime:
             raise ValueError("poll_seconds must be positive")
 
         self._execute_fn = execute_fn
-        self.durability_store = durability_store
+        self.runtime_store = runtime_store
         self.heartbeat_seconds = heartbeat_seconds
         self.stale_seconds = stale_seconds
         self.scan_seconds = scan_seconds
         self.poll_seconds = poll_seconds
         self._attempt_runner = AttemptRunner(
             self.execute,
-            durability_store=durability_store,
+            runtime_store=runtime_store,
             heartbeat_seconds=heartbeat_seconds,
             stale_seconds=stale_seconds,
         )
         self._recovery_scheduler = RecoveryScheduler(
             self._attempt_runner,
-            durability_store=durability_store,
+            runtime_store=runtime_store,
             stale_seconds=stale_seconds,
             scan_seconds=scan_seconds,
         )
@@ -82,7 +82,7 @@ class DurableRuntime:
         """Initialize storage and optionally start proactive recovery scanning."""
         if self._started:
             return
-        await self.durability_store.initialize()
+        await self.runtime_store.initialize()
         self._started = True
         self._recovery_scheduler.start(recover=recover)
 
@@ -92,14 +92,14 @@ class DurableRuntime:
             return
         await self._recovery_scheduler.stop()
         self._started = False
-        await self.durability_store.close()
+        await self.runtime_store.close()
 
     async def submit(self, execution_id: str, request: JsonValue) -> DurableExecution:
         """Accept an idempotent request and ensure recoverable work is scheduled."""
         self._require_started()
         if not execution_id:
             raise ValueError("execution_id must not be empty")
-        state = await self.durability_store.accept(
+        state = await self.runtime_store.accept(
             execution_id,
             copy_json_value(request, "request"),
         )
@@ -120,7 +120,7 @@ class DurableRuntime:
     async def get_execution(self, execution_id: str) -> DurableExecution | None:
         """Return persisted state and schedule recovery if it is currently eligible."""
         self._require_started()
-        state = await self.durability_store.get(execution_id)
+        state = await self.runtime_store.get(execution_id)
         if state is not None:
             self._recovery_scheduler.ensure_scheduled(state)
         return state
@@ -160,7 +160,7 @@ class DurableRuntime:
     ) -> list[DurableEvent]:
         """Return persisted events after an optional replay cursor."""
         self._require_started()
-        return await self.durability_store.events(execution_id, after_sequence)
+        return await self.runtime_store.events(execution_id, after_sequence)
 
     def _require_started(self) -> None:
         if not self._started:

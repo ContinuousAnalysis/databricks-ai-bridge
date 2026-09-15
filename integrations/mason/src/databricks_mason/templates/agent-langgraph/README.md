@@ -1,9 +1,8 @@
 # Mason LangGraph Agent
 
 A LangGraph agent served by `databricks_mason.AgentApp`. Mason keeps invocation state and events in
-memory during `mason dev`. The generated app enables the durable runtime by default, so deployment
-stores them in an app-owned Lakebase schema and recovers interrupted work. Initialize with
-`--no-durable-runtime` for process-local deployed state instead.
+memory during `mason dev`. Deployment attaches a persistent Runtime Store, so invocation state and
+events survive process loss and interrupted work can be recovered.
 
 ## Run locally
 
@@ -77,12 +76,12 @@ mason sessions bind my-agent-sessions
 
 ## Crash recovery
 
-When `[durability] enabled = true` in `agent.toml`, `runtime/main.py` registers both `@app.invoke` and
-`@app.on_recovery`. The initial attempt writes the invocation ID into LangGraph checkpoint metadata
-with synchronous checkpoint durability. A recovery attempt continues from that checkpoint when it
-exists; otherwise it safely replays the persisted application input. Invocation state and emitted
-events survive process loss in deployed Lakebase. With `--no-durable-runtime`, only `@app.invoke`
-is registered and invocation state and events remain process-local.
+`runtime/main.py` registers the agent's `invoke` and `recover` hooks with Mason Runtime. The initial
+attempt writes the invocation ID into LangGraph checkpoint metadata with synchronous checkpoint
+durability. A recovery attempt continues from that checkpoint when it exists; otherwise it safely
+replays the persisted application input. Deployed agents use a persistent Runtime Store, so
+invocation state and emitted events survive process loss. `mason dev` uses an in-process Runtime
+Store and does not recover work after the process exits.
 
 External side effects are still at-least-once. Make tools idempotent because work performed between
 the last checkpoint and a crash can run again.
@@ -104,10 +103,8 @@ Use `mason init --framework langgraph --disable-chat-app` for API-only output.
 mason --profile <profile> deploy agent-langgraph --source .
 ```
 
-By default, `agent.toml` contains `[durability] enabled = true`. Deployment provisions or reuses the
-app's dedicated durability Lakebase project. Only the app-owned
-`databricks_mason_runtime_<hash>` schema and runtime tables are added. A project initialized with
-`--no-durable-runtime` records `enabled = false` and provisions no durability Lakebase.
+Deployment provisions or reuses the app's dedicated Runtime Store. Only the app-owned
+`databricks_mason_runtime_<hash>` schema and runtime tables are added.
 
 The `__Host-databricks-app-router` cookie may be supplied independently for sticky replica routing.
 It is not authentication and is not used as the template's application session ID.
