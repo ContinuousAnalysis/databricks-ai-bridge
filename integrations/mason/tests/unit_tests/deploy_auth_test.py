@@ -208,6 +208,147 @@ def test_unknown_configured_scopes_do_not_overwrite_effective_grants(monkeypatch
     apps.create_update.assert_not_called()
 
 
+def test_adoption_preserves_observed_identity_defaults_in_explicit_config(monkeypatch):
+    defaults = ["iam.access-control:read", "iam.current-user:read"]
+    existing = App(name="app", effective_user_api_scopes=defaults)
+    app_auth, apps, _ = _sdk(monkeypatch, existing)
+    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    assert plan.existing_scopes == ()
+    assert plan.scopes == ("ai-gateway", *defaults)
+    updated = App(
+        name="app", user_api_scopes=list(plan.scopes), effective_user_api_scopes=list(plan.scopes)
+    )
+    apps.get.side_effect = [existing, updated]
+    app_auth.apply_app_auth(plan, attempts=1)
+    assert apps.create_update.call_args.kwargs["app"].as_dict() == {
+        "name": "app",
+        "user_api_scopes": ["ai-gateway", *defaults],
+    }
+
+
+@pytest.mark.parametrize("extra", ["sql", "iam.access-control:write", "iam.unknown:read"])
+def test_omitted_config_rejects_unexplained_effective_extras(monkeypatch, extra):
+    app_auth, apps, _ = _sdk(
+        monkeypatch, App(name="app", effective_user_api_scopes=["iam.current-user:read", extra])
+    )
+    with pytest.raises(AgentCliError, match="configured scopes"):
+        app_auth.prepare_app_auth("app", "selected", adopt=True)
+    apps.create.assert_not_called()
+    apps.create_update.assert_not_called()
+
+
+@pytest.mark.parametrize("new_app", [True, False])
+def test_effective_verification_allows_only_observed_identity_defaults(monkeypatch, new_app):
+    configured = ["ai-gateway"]
+    ready = App(
+        name="app",
+        user_api_scopes=configured,
+        effective_user_api_scopes=[*configured, "iam.access-control:read", "iam.current-user:read"],
+    )
+    app_auth, apps, _ = _sdk(monkeypatch, None if new_app else ready)
+    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    apps.get.side_effect = None
+    apps.get.return_value = ready
+    app_auth.apply_app_auth(plan, attempts=1)
+    if new_app:
+        assert apps.create.call_args.args[0].as_dict() == {
+            "name": "app",
+            "user_api_scopes": configured,
+        }
+    else:
+        apps.create_update.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "effective",
+    [
+        ["iam.access-control:read", "iam.current-user:read"],
+        ["ai-gateway", "sql"],
+        ["ai-gateway", "iam.current-user:read", "iam.current-user:write"],
+    ],
+)
+def test_effective_verification_rejects_missing_required_or_unexplained_scopes(
+    monkeypatch, effective
+):
+    app_auth, apps, _ = _sdk(
+        monkeypatch,
+        App(name="app", user_api_scopes=["ai-gateway"], effective_user_api_scopes=effective),
+    )
+    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    with pytest.raises(AgentCliError, match="effective"):
+        app_auth.apply_app_auth(plan, attempts=1)
+    apps.create_update.assert_not_called()
+
+
+def test_disabled_forwarding_fails_deploy_before_app_or_store_mutations(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    before = project.path.read_text()
+    _, apps, _ = _sdk(
+        monkeypatch,
+        App(
+            name="agent-mason-test",
+            user_api_scopes=["ai-gateway"],
+            effective_user_api_scopes=["ai-gateway"],
+            forward_user_access_token=False,
+        ),
+    )
+    client = Mock()
+    cloud = Mock()
+    monkeypatch.setattr(deploy_mod, "_databricks", cloud)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_wait_for_running",
+        Mock(side_effect=AssertionError("unexpected compute lifecycle")),
+    )
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["test", "--source", str(tmp_path), "--adopt-user-auth"],
+        obj=SimpleNamespace(profile="selected", output="text", client=client),
+    )
+    assert result.exit_code != 0
+    assert "forward_user_access_token" in result.output
+    assert "stop" in result.output.lower() and "start" in result.output.lower()
+    client.assert_not_called()
+    cloud.assert_not_called()
+    apps.create.assert_not_called()
+    apps.create_update.assert_not_called()
+    assert project.path.read_text() == before
+
+
+def test_forwarding_disabled_after_preflight_stops_before_update(monkeypatch):
+    app_auth, apps, _ = _sdk(monkeypatch, App(name="app", user_api_scopes=["sql"]))
+    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    apps.get.return_value = App(
+        name="app", user_api_scopes=["sql"], forward_user_access_token=False
+    )
+    with pytest.raises(AgentCliError, match="forward_user_access_token"):
+        app_auth.apply_app_auth(plan, attempts=1)
+    apps.create_update.assert_not_called()
+
+
+def test_unexplained_effective_grants_after_preflight_stop_before_update(monkeypatch):
+    app_auth, apps, _ = _sdk(monkeypatch, App(name="app"))
+    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    apps.get.return_value = App(name="app", effective_user_api_scopes=["sql"])
+    with pytest.raises(AgentCliError, match="configured scopes"):
+        app_auth.apply_app_auth(plan, attempts=1)
+    apps.create_update.assert_not_called()
+
+
+def test_disabled_forwarding_during_verification_stops_deploy(monkeypatch):
+    app_auth, apps, _ = _sdk(monkeypatch)
+    plan = app_auth.prepare_app_auth("app", "selected", adopt=False)
+    apps.get.side_effect = None
+    apps.get.return_value = App(
+        name="app",
+        user_api_scopes=["ai-gateway"],
+        effective_user_api_scopes=["ai-gateway"],
+        forward_user_access_token=False,
+    )
+    with pytest.raises(AgentCliError, match="forward_user_access_token"):
+        app_auth.apply_app_auth(plan, attempts=1)
+
+
 @pytest.mark.parametrize("auth", [None, "app"])
 def test_app_only_contract_keeps_legacy_deployment_path(tmp_path, monkeypatch, auth):
     _project(tmp_path, marker=None, auth=auth)

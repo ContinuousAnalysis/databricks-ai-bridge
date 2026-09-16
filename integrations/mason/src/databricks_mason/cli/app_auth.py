@@ -15,6 +15,29 @@ from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import load_project_metadata
 from databricks_mason.project_types import AgentServer
 
+_IDENTITY_DEFAULT_SCOPES = frozenset({"iam.access-control:read", "iam.current-user:read"})
+
+
+def _validate_forwarding(app: App) -> None:
+    if app.forward_user_access_token is False:
+        raise AgentCliError(
+            f"App '{app.name}' has forward_user_access_token=False; user auth requires forwarding.",
+            hint="Enable user access token forwarding in Databricks Apps, then stop and start "
+            "the App compute for the setting to take effect before retrying deployment.",
+        )
+
+
+def _implicit_identity_scopes(app: App) -> set[str]:
+    if app.user_api_scopes is not None:
+        return set()
+    effective = set(app.effective_user_api_scopes or [])
+    if effective - _IDENTITY_DEFAULT_SCOPES:
+        raise AgentCliError(
+            "Apps did not return configured scopes for an App with unexplained effective grants.",
+            hint="Inspect the App's scope configuration with its owner before retrying adoption.",
+        )
+    return effective
+
 
 def requires_user_auth(project: AgentProject | None) -> bool:
     """Validate the local contract before any deployment or store mutation."""
@@ -61,23 +84,17 @@ def prepare_app_auth(name: str, profile: str | None, *, adopt: bool) -> AppAuthP
             existing = None
     except (DatabricksError, ValueError) as exc:
         raise AgentCliError(f"Could not read Apps user scopes for '{name}'.") from exc
+    if existing is not None:
+        _validate_forwarding(existing)
     if existing is not None and not adopt:
         raise AgentCliError(
             f"App '{name}' already exists; user-auth scope management requires --adopt-user-auth.",
             hint="Review its existing scopes and coordinate with other owners first. Adoption "
             "preserves unrelated scopes; scope writes are not atomic with concurrent changes.",
         )
-    if (
-        existing is not None
-        and existing.user_api_scopes is None
-        and existing.effective_user_api_scopes
-    ):
-        raise AgentCliError(
-            "Apps did not return configured scopes for an App with effective grants.",
-            hint="Inspect the App's scope configuration with its owner before retrying adoption.",
-        )
+    implicit = _implicit_identity_scopes(existing) if existing is not None else set()
     configured = tuple(sorted(set(existing.user_api_scopes or []))) if existing else None
-    scopes = tuple(sorted({*(configured or ()), "ai-gateway"}))
+    scopes = tuple(sorted({*(configured or ()), *implicit, "ai-gateway"}))
     return AppAuthPlan(apps=apps, name=name, existing_scopes=configured, scopes=scopes)
 
 
@@ -105,6 +122,8 @@ def apply_app_auth(plan: AppAuthPlan, *, instances: int | None = None, attempts:
             plan.apps.create(desired)
         else:
             current = plan.apps.get(plan.name)
+            _validate_forwarding(current)
+            _implicit_identity_scopes(current)
             if tuple(sorted(set(current.user_api_scopes or []))) != plan.existing_scopes:
                 raise AgentCliError("Apps user scopes changed since preflight; review and retry.")
             if plan.scopes != plan.existing_scopes or instances is not None:
@@ -113,9 +132,14 @@ def apply_app_auth(plan: AppAuthPlan, *, instances: int | None = None, attempts:
                 )
         for attempt in range(attempts):
             current = plan.apps.get(plan.name)
-            if set(current.user_api_scopes or []) == set(plan.scopes) and set(
-                current.effective_user_api_scopes or []
-            ) == set(plan.scopes):
+            _validate_forwarding(current)
+            desired_scopes = set(plan.scopes)
+            effective = set(current.effective_user_api_scopes or [])
+            if (
+                set(current.user_api_scopes or []) == desired_scopes
+                and desired_scopes.issubset(effective)
+                and effective.issubset(desired_scopes | _IDENTITY_DEFAULT_SCOPES)
+            ):
                 return
             if attempt + 1 < attempts:
                 time.sleep(5)

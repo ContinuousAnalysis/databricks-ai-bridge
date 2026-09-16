@@ -16,6 +16,13 @@ TEMPLATES = Path(__file__).parents[2] / "src/databricks_mason/templates"
 @pytest.fixture(params=["langgraph", "openai"])
 def template(request, monkeypatch):
     framework = request.param
+    dependencies = (
+        ("databricks_langchain", "langgraph", "langchain", "langchain_mcp_adapters")
+        if framework == "langgraph"
+        else ("agents", "databricks_openai")
+    )
+    for dependency in dependencies:
+        pytest.importorskip(dependency, reason=f"Requires databricks-mason[{framework}]")
     monkeypatch.syspath_prepend(str(TEMPLATES / f"agent-{framework}"))
     for name in list(sys.modules):
         if name in {"agent", "runtime"} or name.startswith(("agent.", "runtime.")):
