@@ -27,16 +27,15 @@ def _validate_forwarding(app: App) -> None:
         )
 
 
-def _implicit_identity_scopes(app: App) -> set[str]:
+def _validate_implicit_identity_scopes(app: App) -> None:
     if app.user_api_scopes is not None:
-        return set()
+        return
     effective = set(app.effective_user_api_scopes or [])
     if effective - _IDENTITY_DEFAULT_SCOPES:
         raise AgentCliError(
             "Apps did not return configured scopes for an App with unexplained effective grants.",
             hint="Inspect the App's scope configuration with its owner before retrying adoption.",
         )
-    return effective
 
 
 def requires_user_auth(project: AgentProject | None) -> bool:
@@ -92,9 +91,10 @@ def prepare_app_auth(name: str, profile: str | None, *, adopt: bool) -> AppAuthP
             hint="Review its existing scopes and coordinate with other owners first. Adoption "
             "preserves unrelated scopes; scope writes are not atomic with concurrent changes.",
         )
-    implicit = _implicit_identity_scopes(existing) if existing is not None else set()
+    if existing is not None:
+        _validate_implicit_identity_scopes(existing)
     configured = tuple(sorted(set(existing.user_api_scopes or []))) if existing else None
-    scopes = tuple(sorted({*(configured or ()), *implicit, "ai-gateway"}))
+    scopes = tuple(sorted({*(configured or ()), "ai-gateway"}))
     return AppAuthPlan(apps=apps, name=name, existing_scopes=configured, scopes=scopes)
 
 
@@ -123,7 +123,7 @@ def apply_app_auth(plan: AppAuthPlan, *, instances: int | None = None, attempts:
         else:
             current = plan.apps.get(plan.name)
             _validate_forwarding(current)
-            _implicit_identity_scopes(current)
+            _validate_implicit_identity_scopes(current)
             if tuple(sorted(set(current.user_api_scopes or []))) != plan.existing_scopes:
                 raise AgentCliError("Apps user scopes changed since preflight; review and retry.")
             if plan.scopes != plan.existing_scopes or instances is not None:

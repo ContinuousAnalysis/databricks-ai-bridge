@@ -208,21 +208,23 @@ def test_unknown_configured_scopes_do_not_overwrite_effective_grants(monkeypatch
     apps.create_update.assert_not_called()
 
 
-def test_adoption_preserves_observed_identity_defaults_in_explicit_config(monkeypatch):
+def test_adoption_does_not_request_implicit_identity_defaults(monkeypatch):
     defaults = ["iam.access-control:read", "iam.current-user:read"]
     existing = App(name="app", effective_user_api_scopes=defaults)
     app_auth, apps, _ = _sdk(monkeypatch, existing)
     plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
     assert plan.existing_scopes == ()
-    assert plan.scopes == ("ai-gateway", *defaults)
+    assert plan.scopes == ("ai-gateway",)
     updated = App(
-        name="app", user_api_scopes=list(plan.scopes), effective_user_api_scopes=list(plan.scopes)
+        name="app",
+        user_api_scopes=list(plan.scopes),
+        effective_user_api_scopes=[*plan.scopes, *defaults],
     )
     apps.get.side_effect = [existing, updated]
     app_auth.apply_app_auth(plan, attempts=1)
     assert apps.create_update.call_args.kwargs["app"].as_dict() == {
         "name": "app",
-        "user_api_scopes": ["ai-gateway", *defaults],
+        "user_api_scopes": ["ai-gateway"],
     }
 
 
