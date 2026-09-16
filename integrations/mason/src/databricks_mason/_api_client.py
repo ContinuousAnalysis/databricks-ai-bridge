@@ -11,6 +11,7 @@ from __future__ import annotations
 import configparser
 import os
 import pathlib
+import re
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -76,6 +77,14 @@ def session_store_path(name: str) -> str:
     if not raw:
         raise AgentCliError("A session store name is required.")
     return f"session-stores/{raw}"
+
+
+def runtime_store_path(name: str) -> str:
+    """Normalize a logical ID or resource name for the internal Runtime Store API."""
+    raw = name.removeprefix("runtime-stores/")
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,61}[a-z0-9]", raw):
+        raise AgentCliError(f"Invalid runtime store id or resource name: {name!r}")
+    return f"runtime-stores/{raw}"
 
 
 def memory_entry_path(store: str, entry: str) -> str:
@@ -174,6 +183,7 @@ class _MasonApiClient:
         runtime_store_id: str,
         app_service_principal_id: str,
         *,
+        app_name: str,
         retry_transient: bool = False,
     ) -> models.RuntimeStore:
         """Create the deployment's Runtime Store through Conversation Store."""
@@ -184,14 +194,27 @@ class _MasonApiClient:
                 _RUNTIME_STORES_PATH,
                 query={"runtime_store_id": runtime_store_id},
                 body={
-                    "app_principal": {
-                        "type": "SERVICE_PRINCIPAL",
-                        "name": app_service_principal_id,
+                    "owner": {
+                        "app": {
+                            "name": app_name,
+                            "service_principal_id": app_service_principal_id,
+                        }
                     }
                 },
                 safe_to_retry=retry_transient,
             ),
         )
+
+    def get_runtime_store(self, name: str) -> models.RuntimeStore:
+        """Resolve the service-managed backend and app owner before reusing a store."""
+        return _as(
+            models.RuntimeStore,
+            self._do("GET", f"/api/2.0/agents/{runtime_store_path(name)}"),
+        )
+
+    def delete_runtime_store(self, name: str) -> dict:
+        """Delete a deployment's Runtime Store and its dedicated database."""
+        return self._do("DELETE", f"/api/2.0/agents/{runtime_store_path(name)}", safe_to_retry=True)
 
     def _do(
         self,

@@ -9,9 +9,8 @@ from typing import Any
 
 from databricks_mason.errors import AgentCliError
 
-_PROJECT = "databricks-internal-agent-runtime-store"
-_BRANCH = "production"
 _ENDPOINT = "primary"
+_RESOURCE_ID = re.compile(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
 
 
 @dataclass(frozen=True)
@@ -44,33 +43,48 @@ def runtime_store_id(app: str, app_service_principal_id: str) -> str:
     return f"{normalized[: 62 - len(suffix)].rstrip('-')}-{suffix}"
 
 
-def backend(app: str, store_id: str) -> LakebaseBackend:
-    """Return the deterministic backend for an already-existing Runtime Store."""
-    return LakebaseBackend(
-        project=_PROJECT,
-        branch=_BRANCH,
-        endpoint_id=_ENDPOINT,
-        database=store_id,
-        schema=get_lakebase_schema(app),
-    )
+def validate_owner(
+    app: str, store_id: str, app_service_principal_id: str, runtime_store: Any
+) -> None:
+    """Refuse to reuse or delete a store belonging to a different app identity."""
+    if (
+        not isinstance(runtime_store, dict)
+        or runtime_store.get("name") != f"runtime-stores/{store_id}"
+    ):
+        raise AgentCliError("Runtime Store API returned an unexpected resource name.")
+    owner = runtime_store.get("owner")
+    app_owner = owner.get("app") if isinstance(owner, dict) else None
+    # Legacy EStore rows only persisted the SP. Its exact match is required even when the API
+    # cannot return an app name; new rows must also agree with the deployment name.
+    if (
+        not isinstance(app_owner, dict)
+        or app_owner.get("name") not in (None, "", app)
+        or app_owner.get("service_principal_id") != app_service_principal_id
+    ):
+        raise AgentCliError(f"Runtime Store '{store_id}' does not belong to this app identity.")
 
 
-def backend_from_api(app: str, store_id: str, runtime_store: Any) -> LakebaseBackend:
+def backend_from_api(
+    app: str, store_id: str, app_service_principal_id: str, runtime_store: Any
+) -> LakebaseBackend:
     """Validate and convert the Runtime Store API response."""
-    lakebase = runtime_store.get("lakebase_backend") if isinstance(runtime_store, dict) else None
+    validate_owner(app, store_id, app_service_principal_id, runtime_store)
+    storage_backend = runtime_store.get("storage_backend")
+    lakebase = storage_backend.get("lakebase") if isinstance(storage_backend, dict) else None
     project = lakebase.get("project_id") if isinstance(lakebase, dict) else None
     branch_path = lakebase.get("branch") if isinstance(lakebase, dict) else None
     database = lakebase.get("database_id") if isinstance(lakebase, dict) else None
     expected_branch = f"projects/{project}/branches/"
     if (
-        not project
+        not isinstance(project, str)
+        or not _RESOURCE_ID.fullmatch(project)
         or not isinstance(branch_path, str)
         or not branch_path.startswith(expected_branch)
-        or not database
+        or not _RESOURCE_ID.fullmatch(branch_path[len(expected_branch) :])
+        or not isinstance(database, str)
+        or not _RESOURCE_ID.fullmatch(database)
     ):
         raise AgentCliError("Runtime Store API returned an incomplete Lakebase backend.")
-    if project != _PROJECT or database != store_id:
-        raise AgentCliError("Runtime Store API returned an unexpected Lakebase backend.")
     return LakebaseBackend(
         project=project,
         branch=branch_path[len(expected_branch) :],

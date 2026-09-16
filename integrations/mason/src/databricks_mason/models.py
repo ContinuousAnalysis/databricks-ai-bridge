@@ -54,14 +54,40 @@ class RuntimeStoreLakebaseBackend(_Model):
         return self.get("database_id")
 
 
+class RuntimeStoreAppOwner(_Model):
+    @property
+    def name(self) -> Optional[str]:
+        return self.get("name")
+
+    @property
+    def service_principal_id(self) -> Optional[str]:
+        return self.get("service_principal_id")
+
+
+class RuntimeStoreOwner(_Model):
+    @property
+    def app(self) -> Optional[RuntimeStoreAppOwner]:
+        return _wrap(self.get("app"), RuntimeStoreAppOwner)
+
+
+class RuntimeStoreStorageBackend(_Model):
+    @property
+    def lakebase(self) -> Optional[RuntimeStoreLakebaseBackend]:
+        return _wrap(self.get("lakebase"), RuntimeStoreLakebaseBackend)
+
+
 class RuntimeStore(_Model):
     @property
     def name(self) -> Optional[str]:
         return self.get("name")
 
     @property
-    def lakebase_backend(self) -> Optional[RuntimeStoreLakebaseBackend]:
-        return _wrap(self.get("lakebase_backend"), RuntimeStoreLakebaseBackend)
+    def owner(self) -> Optional[RuntimeStoreOwner]:
+        return _wrap(self.get("owner"), RuntimeStoreOwner)
+
+    @property
+    def storage_backend(self) -> Optional[RuntimeStoreStorageBackend]:
+        return _wrap(self.get("storage_backend"), RuntimeStoreStorageBackend)
 
 
 class MemoryStore(_Model):

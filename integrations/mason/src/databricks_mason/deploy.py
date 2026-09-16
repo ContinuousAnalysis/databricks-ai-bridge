@@ -439,19 +439,44 @@ def _reconcile_durability_store(
     app_service_principal_id: Optional[str],
 ) -> lakebase_durability_store.LakebaseBackend:
     """Create or reuse the Runtime Store dedicated to this Databricks App identity."""
-    if app_service_principal_id is None:
+    if not app_service_principal_id:
         raise AgentCliError("Could not resolve the app's service principal for its Runtime Store.")
     store_id = lakebase_durability_store.runtime_store_id(deployment_name, app_service_principal_id)
     with render.status("Reconciling Runtime Store…"):
         try:
             store = client.create_runtime_store(
-                store_id, app_service_principal_id, retry_transient=True
+                store_id,
+                app_service_principal_id,
+                app_name=deployment_name,
+                retry_transient=True,
             )
         except AgentCliError as exc:
             if exc.error_code != "ALREADY_EXISTS":
                 raise
-            return lakebase_durability_store.backend(deployment_name, store_id)
-    return lakebase_durability_store.backend_from_api(deployment_name, store_id, store)
+            store = client.get_runtime_store(store_id)
+    return lakebase_durability_store.backend_from_api(
+        deployment_name, store_id, app_service_principal_id, store
+    )
+
+
+def _delete_durability_store(client, deployment_name: str, app_service_principal_id: str) -> None:
+    """Keep the app available for cleanup retries until its Runtime Store is gone."""
+    store_id = lakebase_durability_store.runtime_store_id(deployment_name, app_service_principal_id)
+    try:
+        store = client.get_runtime_store(store_id)
+        lakebase_durability_store.validate_owner(
+            deployment_name, store_id, app_service_principal_id, store
+        )
+        client.delete_runtime_store(store_id)
+    except AgentCliError as exc:
+        if exc.error_code == "NOT_FOUND":
+            return
+        raise AgentCliError(
+            f"Could not delete Runtime Store '{store_id}': {exc.message}",
+            error_code=exc.error_code,
+            hint=f"The deployment was retained. Retry `mason deployments delete {deployment_name}` "
+            "after resolving the Runtime Store error.",
+        ) from exc
 
 
 # --- mason deploy -----------------------------------------------------------
@@ -841,9 +866,17 @@ def deployments_stop(obj, name, yes) -> None:
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
 def deployments_delete(obj, name, yes) -> None:
-    """Delete a deployment."""
+    """Delete a deployment and its Runtime Store, including persisted invocation state."""
     _validate_deployment_name(name)
-    _confirm_destroy(f"Delete deployment '{name}'", assume_yes=yes)
+    _confirm_destroy(f"Delete deployment '{name}' and its Runtime Store data", assume_yes=yes)
+    app_service_principal_id = _app_service_principal(name, obj.profile)
+    if not app_service_principal_id:
+        raise AgentCliError(
+            "Could not resolve the app's service principal for Runtime Store cleanup.",
+            hint="The deployment was retained. Check access to the app and retry deletion.",
+        )
+    with render.status("Deleting Runtime Store…"):
+        _delete_durability_store(obj.client(), name, app_service_principal_id)
     _databricks(
         ["apps", "delete", name], obj.profile, action=f"Could not delete deployment '{name}'."
     )

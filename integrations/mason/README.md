@@ -156,6 +156,15 @@ handler is omitted, startup warns that automatic crash recovery is disabled; reg
 function for both decorators when replaying the initial invocation is safe. Agent checkpoint
 restoration and idempotent external side effects remain the developer's responsibility.
 
+Redeploying the same app reuses its Runtime Store by reading the service-managed database
+coordinates and verifying the owner SP and app name. Legacy stores without an app name are accepted
+only if their SP matches. The physical database name can differ from the logical store ID.
+`mason deployments delete` deletes the Runtime Store and its invocation data before deleting the
+app. Cleanup errors retain the app so the command can be retried. Deleting the app directly bypasses
+this cleanup. Session/Memory Stores and tracing resources retain their existing independent
+lifecycles. Runtime Store APIs are internal and undocumented; agent developers use Mason's
+deployment commands. See [Runtime Store live checks](tests/e2e/RUNTIME_STORE.md) for E2E setup.
+
 Bare `mason init`, `--framework langgraph`, and `--framework openai` scaffold `AgentApp` with its
 durable runtime enabled. Pass `--no-durable-runtime` for the same Mason HTTP contract with
 process-local state and no Lakebase provisioning. Pass `--server custom` for a minimal FastAPI

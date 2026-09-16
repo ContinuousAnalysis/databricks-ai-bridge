@@ -86,6 +86,9 @@ def test_delete_aborts_without_confirmation(monkeypatch):
 
 def test_delete_proceeds_with_yes(monkeypatch):
     called = []
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
+    monkeypatch.setattr(_Ctx, "client", lambda self: object(), raising=False)
+    monkeypatch.setattr(deploy_mod, "_delete_durability_store", lambda *args: None)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
