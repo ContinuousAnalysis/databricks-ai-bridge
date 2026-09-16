@@ -185,10 +185,16 @@ The UUID also acts as an idempotency key: repeating the same request reuses the 
 while its record is retained; using the ID for a different request returns `409`.
 
 `mason dev` keeps execution state in process and loses it on restart. For projects with
-`[agent].server = "mason"`, `mason deploy` provisions a persistent Runtime Store for requests,
+`[agent].server = "mason"` using only app-auth tools, `mason deploy` provisions a persistent Runtime Store for requests,
 status, events, and results. Register `@app.recover` to restart interrupted work after worker
 failures. Recovery is at-least-once, so external side effects must be idempotent. Session and
 Memory Stores separately preserve the state used by your agent.
+
+If any managed tool uses `auth = "user"`, invocations instead run within the HTTP request lifetime.
+Deploy does not provision or attach a Runtime Store for those invocations. Background execution,
+durable recovery, and approval/resume are unsupported in this phase; request-user results are
+token-free and process-local. Existing Runtime Store environment variables are not removed or
+used to make user work durable. Declared Memory and Session Stores remain independently managed.
 
 Use `server = "custom"` to deploy your own HTTP server without provisioning a Runtime Store.
 Changing the server type of an existing deployment is not supported. To use a different server,
@@ -299,6 +305,65 @@ mason tools add uc-function catalog.schema.lookup_ticket
 mason tools remove mcp system.ai.web_search
 mason tools list
 ```
+
+### Managed tool identity and migration
+
+`mason tools add mcp` and `mason tools add sandbox` write explicit `auth = "user"` by default.
+Use `--auth app` for the App service principal instead. This field is on the tool entry, not
+inside `source` or `policy`:
+
+```toml
+[[tools]]
+id = "web_search"
+auth = "user"
+source = { kind = "mcp", service = "system.ai.web_search" }
+```
+
+Direct UC-function bindings remain app/default identity and do not accept `--auth user`.
+`mason tools list` shows `user`, `app`, `unspecified` (legacy MCP/sandbox), or `app/default`
+(UC function). Missing legacy auth continues to mean App identity at runtime; it is never
+silently upgraded to user identity.
+
+New Mason-server projects record `request_auth_contract_version = 1` in `.mason/project.toml`.
+
+Request-user invocation outcomes and events are process-local, not durable. Idempotency/status
+retention lasts at most one hour and may end earlier under capacity pressure (256 retained
+invocations). Active requests and open invocation streams are not evicted; admission returns 429
+when capacity is occupied. Each invocation may emit up to 2,048 application events and runs for at
+most one hour. Reusing an ID after eviction or a process restart starts a new invocation; callers
+must not treat this as durable exactly-once execution. Streaming disconnects cancel execution.
+Before deploying user-auth tools from an older project, migrate its request handler to the
+current request-auth-aware `AgentApp` template, explicitly choose `user` or `app` on **every**
+managed MCP/sandbox entry, then set that metadata marker. Merely adding the marker does not
+upgrade copied Python code. Deploy rejects missing/invalid markers and incomplete migration
+before creating stores, changing App settings, or rewriting project files. App-only legacy
+projects and generic bring-your-own source directories keep the existing deployment path.
+
+Any user-auth tool requires the Apps `ai-gateway` user scope. For a new App, deploy includes it
+in the initial typed SDK create request before uploading source. An existing App requires
+explicit adoption on each user-auth deploy:
+
+```sh
+mason --profile my-workspace deploy my-agent --adopt-user-auth
+```
+
+Review the target App's scopes and coordinate with its other owners before adopting. Mason
+preserves unrelated configured scopes, updates only user scopes and any explicitly requested
+instance counts, and checks requested **and effective** scopes before source rollout. It checks
+for scope changes since preflight, but Apps read/write is **not atomic**; this is not a lock or
+a compare-and-swap guarantee. Polling is bounded and a mismatch stops source deployment.
+Users may need to sign out and **re-consent** after changing scopes; effective-scope verification
+does not refresh an existing user's consent.
+
+Removing a tool or switching back to app-only auth **does not remove Apps scopes**. Remove
+unneeded scopes explicitly in Databricks Apps, and verify both configured and effective scopes
+before declaring removal complete. Mason does not send empty-list scope updates: the SDK's
+`App.as_dict()` omits empty lists, so that would not prove removal succeeded. No scopes are
+managed for generic bring-your-own apps without this managed user contract.
+
+App-auth tools execute with workload privileges. Restrict App `CAN USE` to callers trusted
+for **all** App-auth tools, or deploy those tools separately. Models, custom MCP servers,
+Memory/Session Stores, and tracing keep their existing credentials.
 
 For MCP services, the remove command accepts the same service name as the add command. You can also
 remove any binding by the ID shown in `mason tools list`, for example `mason tools remove

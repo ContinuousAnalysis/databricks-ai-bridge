@@ -93,8 +93,12 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
             self.kwargs = kwargs
             FakeMultiServerClient.last = self
 
-        async def get_tools(self):
-            return [server.name for server in self.servers]
+        async def get_tools(self, server_name=None):
+            return [
+                server.name
+                for server in self.servers
+                if server_name is None or server.name == server_name
+            ]
 
     class FakeSession:
         async def initialize(self):
@@ -127,6 +131,7 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     monkeypatch.setenv("MASON_PROJECT_ROOT", str(project))
 
     mcp = _reload_mcp()
+    monkeypatch.setattr(mcp, "workspace_client", _FakeWorkspaceClient)
 
     # _declared_servers() builds one server per manifest tool, with the right URLs.
     servers = mcp._declared_servers()

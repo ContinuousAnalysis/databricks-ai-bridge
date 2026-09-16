@@ -38,6 +38,7 @@ class ToolRecord:
     service: str | None = None
     function: str | None = None
     downscope: tuple[ScopeRecord, ...] = ()
+    auth: str | None = None
 
 
 def project_root() -> pathlib.Path:
@@ -97,6 +98,11 @@ def _tool(value: object) -> ToolRecord:
     if not isinstance(raw_downscope, list):
         raise RuntimeError("agent.toml policy.downscope must be an array.")
     kind = _required_string(source.get("kind"), "a tool source kind")
+    auth = value.get("auth")
+    if auth is not None and auth not in ("user", "app"):
+        raise ToolManifestError("Tool auth must be 'user' or 'app'.")
+    if kind == "uc_function" and auth == "user":
+        raise ToolManifestError("UC function auth supports only app/default identity.")
     if kind == "python":
         raise ToolManifestError(
             "Python tools are code-first and cannot be declared in agent.toml. "
@@ -108,6 +114,7 @@ def _tool(value: object) -> ToolRecord:
         service=source.get("service") if isinstance(source.get("service"), str) else None,
         function=source.get("function") if isinstance(source.get("function"), str) else None,
         downscope=tuple(_scope(item) for item in raw_downscope),
+        auth=auth,
     )
     if record.kind == "sandbox" and (record.service != "system.ai.sandbox" or not record.downscope):
         raise RuntimeError("Sandbox bindings require system.ai.sandbox and a downscope.")

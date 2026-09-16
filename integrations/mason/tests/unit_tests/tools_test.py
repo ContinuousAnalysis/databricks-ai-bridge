@@ -18,6 +18,50 @@ class _Ctx:
         self.output = output
 
 
+@pytest.mark.parametrize("auth", [None, "app", "user"])
+@pytest.mark.parametrize(
+    "arguments", [["mcp", "system.ai.web_search"], ["sandbox", "--scope", "table:main.data.table"]]
+)
+def test_add_managed_tool_writes_explicit_auth(tmp_path, arguments, auth):
+    project = _project(tmp_path)
+    options = ["--auth", auth] if auth else []
+    result = CliRunner().invoke(
+        tools, ["add", *arguments, *options, "--source", str(project)], obj=_Ctx()
+    )
+    assert result.exit_code == 0, result.output
+    assert AgentProject.load(project).tools[0].auth == (auth or "user")
+    assert f'auth = "{auth or "user"}"' in (project / "agent.toml").read_text()
+
+
+def test_uc_function_does_not_accept_user_auth(tmp_path):
+    project = _project(tmp_path)
+    result = CliRunner().invoke(
+        tools,
+        ["add", "uc-function", "main.tools.lookup", "--auth", "user", "--source", str(project)],
+        obj=_Ctx(),
+    )
+    assert result.exit_code != 0
+    assert AgentProject.load(project).tools == []
+
+
+def test_list_distinguishes_legacy_app_and_default_auth(tmp_path):
+    from databricks_mason.agent_project import ToolSpec
+
+    root = _project(tmp_path)
+    project = AgentProject.load(root)
+    project.add_tool(ToolSpec.mcp("legacy", service="system.ai.web_search"))
+    project.add_tool(ToolSpec.mcp("workload", service="system.ai.web_search", auth="app"))
+    project.add_tool(ToolSpec.uc_function("function", function="main.tools.lookup"))
+    project.write()
+    result = CliRunner().invoke(tools, ["list", "--source", str(root)], obj=_Ctx("json"))
+    assert result.exit_code == 0, result.output
+    assert [tool["auth"] for tool in json.loads(result.output)["tools"]] == [
+        "unspecified",
+        "app",
+        "app/default",
+    ]
+
+
 def _project(
     tmp_path: pathlib.Path,
     framework: str = "langgraph",
@@ -304,6 +348,7 @@ def test_tools_list_emits_manifest_records_as_json(tmp_path: pathlib.Path):
         {
             "id": "web_search",
             "kind": "mcp",
+            "auth": "user",
             "source": "system.ai.web_search",
         }
     ]

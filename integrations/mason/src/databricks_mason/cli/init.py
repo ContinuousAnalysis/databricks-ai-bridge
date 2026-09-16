@@ -202,7 +202,12 @@ def init(
         # databricks-mason PyPI dependency; it can't drift from the CLI because both ship together.
         _copy_packaged_template(template_name, dest, overlay_names)
         template_ref = _bundled_template_ref()
-        write_project_metadata(dest, framework=selected_framework, template=template_name)
+        write_project_metadata(
+            dest,
+            framework=selected_framework,
+            template=template_name,
+            request_auth_contract_version=1 if mason_server else None,
+        )
         if mason_server:
             memory_store = memory_store or default_store_name(dest.name, "memory")
             session_store = session_store or default_store_name(dest.name, "session")
