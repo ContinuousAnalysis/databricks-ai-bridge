@@ -376,6 +376,10 @@ class Runner:
         rejected = self.run(
             [
                 str(self.mason),
+                "--profile",
+                self.profile,
+                "--output",
+                "json",
                 "tools",
                 "add",
                 "mcp",
@@ -391,7 +395,10 @@ class Runner:
             raise MatrixError(
                 "mason tools add accepted an unavailable MCP service or changed agent.toml"
             )
-        if "Could not validate MCP service" not in rejected.stderr:
+        if json.loads(rejected.stderr).get("error", {}).get("code") not in {
+            "NOT_FOUND",
+            "RESOURCE_DOES_NOT_EXIST",
+        }:
             raise MatrixError(f"Unexpected MCP validation error: {rejected.stderr}")
         self.run(
             [
@@ -422,7 +429,7 @@ class Runner:
             ],
         ]
         for args in commands:
-            self.run([str(self.mason), *args, "--source", str(project)])
+            self.run([str(self.mason), "--profile", self.profile, *args, "--source", str(project)])
         listed = self.run(
             [str(self.mason), "--output", "json", "tools", "list", "--source", str(project)]
         )
