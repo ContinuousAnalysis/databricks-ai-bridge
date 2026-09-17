@@ -75,6 +75,18 @@ def _add_spec(obj: Any, source: pathlib.Path, spec: ToolSpec) -> None:
     project = AgentProject.load(source)
     require_managed_tool_support(project.root)
     changed = project.add_tool(spec)
+    if spec.source.kind == "mcp":
+        service = spec.source.service
+        try:
+            obj.client().get_mcp_service(service)
+        except AgentCliError as exc:
+            raise AgentCliError(
+                f"Could not validate MCP service {service!r}: {exc.message}",
+                error_code=exc.error_code,
+                hint=exc.hint
+                or "Run `mason mcp list --schema catalog.schema` with the same --profile "
+                "to find available services.",
+            ) from exc
     changed_files = [project.write()] if changed else []
     _emit_change(obj, project, spec, changed_files)
 
@@ -179,7 +191,11 @@ def add_mcp(
     tool_id: str | None,
     source: pathlib.Path,
 ) -> None:
-    """Add a Databricks-managed MCP service as a tool (see `mason mcp list` for available services)."""
+    """Validate and add a Databricks-managed MCP service as a tool.
+
+    Checks the service in the selected workspace before changing agent.toml.
+    See `mason mcp list` for available services.
+    """
     _require_arg(service, "managed MCP service name (e.g. system.ai.python_exec)")
     _add_spec(
         obj,

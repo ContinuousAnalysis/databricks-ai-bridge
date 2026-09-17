@@ -93,16 +93,39 @@ def test_tools_add_list_remove(run_mason, tmp_path: pathlib.Path) -> None:
     run_mason(
         "tools",
         "add",
-        "mcp",
-        "system.ai.web_search",
+        "uc-function",
+        "main.tools.lookup_ticket",
         "--name",
-        "websearch",
+        "lookup",
         "--source",
         str(project),
     )
     listing = run_mason("tools", "list", "--source", str(project)).stdout
-    assert "websearch" in listing or "web_search" in listing
-    run_mason("tools", "remove", "websearch", "--source", str(project))
+    assert "lookup" in listing
+    run_mason("tools", "remove", "lookup", "--source", str(project))
+
+
+def test_mcp_add_without_auth_does_not_change_manifest(run_mason, tmp_path: pathlib.Path) -> None:
+    project = tmp_path / "agent"
+    run_mason("init", "--framework", "langgraph", str(project))
+    manifest = project / "agent.toml"
+    before = manifest.read_bytes()
+
+    result = run_mason(
+        "--output",
+        "json",
+        "tools",
+        "add",
+        "mcp",
+        "system.ai.web_search",
+        "--source",
+        str(project),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Could not initialize Databricks auth" in result.stderr
+    assert manifest.read_bytes() == before
 
 
 def test_tracing_disable_and_reenable(run_mason, tmp_path: pathlib.Path) -> None:

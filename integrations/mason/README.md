@@ -304,6 +304,12 @@ For MCP services, the remove command accepts the same service name as the add co
 remove any binding by the ID shown in `mason tools list`, for example `mason tools remove
 web_search`. `mason tools list` reports these managed bindings; it does not inventory custom code.
 
+`mason tools add mcp` looks up the service in the selected workspace before writing `agent.toml`.
+Use `mason --profile <profile> tools add mcp <service>` to select a workspace. A missing service or
+failed lookup (including authentication or permission errors) leaves the project unchanged. This
+checks service metadata access, not whether every tool can be executed at runtime. Listing and
+removing local bindings do not require workspace access.
+
 Discover the MCP Services available to your user before adding one. By default Mason lists the
 Databricks-managed services in `system.ai`; pass `--schema catalog.schema` for another Unity Catalog
 schema. Text output includes a copyable add command, while `--output json` returns normalized service
