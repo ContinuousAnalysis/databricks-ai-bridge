@@ -1,20 +1,18 @@
 """CLI tests for `mason memory bind/unbind` and `mason sessions bind/unbind`.
 
-Backfills coverage for the store-binding command handlers, which mutate agent.toml.
-The store-provisioning helpers are patched; a real temp AgentProject is used.
+Backfills coverage for the local store-binding command handlers using a real temp AgentProject.
 """
 
 from __future__ import annotations
 
 import pathlib
-from unittest import mock
 
 from click.testing import CliRunner
 
 from databricks_mason.agent_project import AgentProject
-from databricks_mason.memory import memory
+from databricks_mason.cli.memory import memory
+from databricks_mason.cli.sessions import sessions
 from databricks_mason.project_config import write_project_metadata
-from databricks_mason.sessions import sessions
 
 
 class _Ctx:
@@ -22,24 +20,20 @@ class _Ctx:
         self.output = output
 
     def client(self):
-        return mock.Mock()
+        raise AssertionError("Binding stores must not require workspace access.")
 
 
 def _project(tmp_path: pathlib.Path) -> pathlib.Path:
     project = tmp_path / "agent-langgraph"
     (project / "agent").mkdir(parents=True)
     write_project_metadata(project, framework="langgraph", template="agent-langgraph")
-    AgentProject.create(project, framework="langgraph").write()
+    AgentProject.create(project, framework="langgraph", server="mason").write()
     return project
 
 
 def test_memory_bind_and_unbind(tmp_path):
     project = _project(tmp_path)
-    with mock.patch(
-        "databricks_mason.deploy._ensure_memory_store",
-        return_value=({"name": "memory-stores/abc123"}, True),
-    ):
-        r = CliRunner().invoke(memory, ["bind", "my-mem", "--source", str(project)], obj=_Ctx())
+    r = CliRunner().invoke(memory, ["bind", "my-mem", "--source", str(project)], obj=_Ctx())
     assert r.exit_code == 0, r.output
     reloaded = AgentProject.load(project)
     assert reloaded.memory_store == "my-mem"
@@ -49,22 +43,21 @@ def test_memory_bind_and_unbind(tmp_path):
     assert AgentProject.load(project).memory_store is None
 
 
-def test_memory_bind_no_create_missing_store_errors(tmp_path):
+def test_memory_bind_rejects_removed_create_option_without_manifest_change(tmp_path):
     project = _project(tmp_path)
-    with mock.patch("databricks_mason.deploy._resolve_memory_store", return_value=None):
-        r = CliRunner().invoke(
-            memory, ["bind", "ghost", "--no-create-stores", "--source", str(project)], obj=_Ctx()
-        )
-    assert r.exit_code != 0
-    assert "does not exist" in r.output
+    before = (project / "agent.toml").read_bytes()
+    result = CliRunner().invoke(
+        memory, ["bind", "ghost", "--no-create-stores", "--source", str(project)], obj=_Ctx()
+    )
+    assert result.exit_code != 0
+    assert "No such option" in result.output
+    assert "--no-create-stores" in result.output
+    assert (project / "agent.toml").read_bytes() == before
 
 
 def test_sessions_bind_and_unbind(tmp_path):
     project = _project(tmp_path)
-    with mock.patch(
-        "databricks_mason.deploy._ensure_session_store", return_value=(mock.Mock(), True)
-    ):
-        r = CliRunner().invoke(sessions, ["bind", "my-sess", "--source", str(project)], obj=_Ctx())
+    r = CliRunner().invoke(sessions, ["bind", "my-sess", "--source", str(project)], obj=_Ctx())
     assert r.exit_code == 0, r.output
     assert AgentProject.load(project).session_store == "my-sess"
 
