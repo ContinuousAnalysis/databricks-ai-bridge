@@ -1,9 +1,9 @@
-# Mason agent-tool matrix
+# Agent Bricks CLI agent-tool matrix
 
 ## MCP registration validation
 
-For a focused check of `mason tools add mcp`, install the Mason wheel and pytest into a virtual
-environment, then run:
+For a focused check of `ab tools add mcp`, install the current `databricks-mason` wheel and pytest
+into a virtual environment, then run:
 
 ```bash
 RUN_MASON_MCP_E2E=1 MASON_E2E_PROFILE=<profile> \
@@ -19,7 +19,7 @@ remotely; no tools are invoked and no workspace resources are created.
 ## Full runtime matrix
 
 This suite proves that CLI edits and direct `agent.toml` edits reach the same runtime code.
-It creates two LangGraph projects (CLI/direct), runs each with `mason dev`, deploys each to
+It creates two LangGraph projects (CLI/direct), runs each with `ab dev`, deploys each to
 Databricks Apps, and semantically exercises sandbox, `system.ai.web_search`, a local Python tool,
 and a temporary Unity Catalog function. The result is 16 evidence rows.
 
@@ -44,11 +44,11 @@ a SQL warehouse. Override its defaults with `--warehouse-id` or `--uc-schema cat
 Deployed Databricks Apps accept programmatic calls under `/api/*` with OAuth Bearer tokens. If the
 workspace profile uses a PAT, pass an OAuth profile for the same workspace with
 `--app-auth-profile`.
-The template repo/ref flags make `mason init` read the exact checkout under test and avoid remote
+The template repo/ref flags make `ab init` read the exact checkout under test and avoid remote
 clone throttling; provide both or omit both to test the default upstream template.
 
-Direct authoring does not call `mason tools add`: it replaces `agent.toml` with
-`fixtures/direct_agent.toml`. CLI authoring invokes the three managed `mason tools add ...`
+Direct authoring does not call `ab tools add`: it replaces `agent.toml` with
+`fixtures/direct_agent.toml`. CLI authoring invokes the three managed `ab tools add ...`
 commands. Both paths then create the same user-owned, framework-native Python tool file with no
 Python entry in `agent.toml`. Every exact command and code-authoring step is captured in
 `commands.log`.
