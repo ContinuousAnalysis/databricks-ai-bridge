@@ -305,7 +305,7 @@ def test_scaffolded_agent_boots_and_answers_locally(
                 line for line in buf.getvalue().splitlines() if line.startswith("ab endpoint")
             ]
             assert len(commands) == 1, buf.getvalue()
-            cli_env = {**boot_env, "PATH": f"{mason.parent}:/usr/bin:/bin"}
+            cli_env = {**boot_env, "PATH": f"{ab.parent}:/usr/bin:/bin"}
             invocation_ids = set()
             for shell in shells:
                 for attempt in range(2):
