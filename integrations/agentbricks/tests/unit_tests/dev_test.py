@@ -689,6 +689,8 @@ def test_dev_manifest_omits_profile_when_env_file_has_credentials(tmp_path, monk
     assert "DATABRICKS_CONFIG_PROFILE" not in env
     output = " ".join(result.output.split())
     assert "credentials in .env" in output
+    # No Profile/Host announcement either — they would point at a workspace the agent doesn't use.
+    assert "ml (from --profile)" not in output
 
 
 def test_dev_warns_when_flag_overrides_env_file_profile(tmp_path, monkeypatch):

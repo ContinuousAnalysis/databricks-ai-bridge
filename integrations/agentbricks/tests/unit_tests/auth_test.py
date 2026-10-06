@@ -242,6 +242,9 @@ def test_parse_env_file_edge_cases(tmp_path):
         'DQ="double quoted"\n'
         "SQ='single quoted'\n"
         "SPACED =  padded  \n"
+        "INLINE=prod  # team shared\n"
+        'QUOTED_HASH="a # b"\n'
+        "NO_SPACE_HASH=prod#literal\n"
         "a line without an equals sign\n"
     )
     assert auth._parse_env_file(env) == {
@@ -250,6 +253,11 @@ def test_parse_env_file_edge_cases(tmp_path):
         "DQ": "double quoted",
         "SQ": "single quoted",
         "SPACED": "padded",
+        # dotenv strips an unquoted inline comment (a `#` after whitespace), keeps a quoted `#`
+        # literal, and leaves a `#` with no preceding whitespace alone.
+        "INLINE": "prod",
+        "QUOTED_HASH": "a # b",
+        "NO_SPACE_HASH": "prod#literal",
     }
     assert auth._parse_env_file(tmp_path / "absent.env") == {}
 
@@ -273,3 +281,11 @@ def test_profile_host_honors_databricks_config_file(tmp_path, monkeypatch):
     broken.write_text("= = =\nnot ini at all\n")
     monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(broken))
     assert auth.profile_host("primary") is None
+
+    # A tilde path is expanded like the SDK does (HOME redirected to tmp).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    configs = tmp_path / "configs"
+    configs.mkdir()
+    (configs / "databrickscfg").write_text("[primary]\nhost = https://primary.databricks.com\n")
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", "~/configs/databrickscfg")
+    assert auth.profile_host("primary") == "https://primary.databricks.com"

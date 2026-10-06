@@ -141,24 +141,27 @@ def dev(
             "traces to a local MLflow server. Run `agentbricks deploy` to trace to the bound experiment.[/]"
         )
     local_env: dict[str, str] = {}
-    if obj.profile:
+    # Explicit credentials in `.env` are the one exception to landing the resolved profile in the
+    # dev manifest: don't mix them with a profile env var.
+    uses_env_credentials = bool(
+        obj.profile and (env_file.get("DATABRICKS_HOST") or env_file.get("DATABRICKS_TOKEN"))
+    )
+    if uses_env_credentials:
+        render.console().print(
+            "[dim]The agent authenticates with the DATABRICKS_HOST/TOKEN credentials in "
+            ".env, not the resolved profile.[/]"
+        )
+    elif obj.profile:
         # Land the resolved profile in the dev manifest — i.e. the agent's process env, where it
         # beats `.env` because the template loads dotenv with override=False — so the agent runs
-        # with the same profile the CLI resolved. Explicit credentials in `.env` are the one
-        # exception: don't mix them with a profile env var.
-        if env_file.get("DATABRICKS_HOST") or env_file.get("DATABRICKS_TOKEN"):
+        # with the same profile the CLI resolved.
+        local_env["DATABRICKS_CONFIG_PROFILE"] = obj.profile
+        env_file_profile = env_file.get("DATABRICKS_CONFIG_PROFILE")
+        if env_file_profile and env_file_profile != obj.profile:
             render.console().print(
-                "[dim]The agent authenticates with the DATABRICKS_HOST/TOKEN credentials in "
-                ".env, not the resolved profile.[/]"
+                f"[dim]The agent will run with profile '{obj.profile}' "
+                f"(from {obj.profile_source}), not .env's '{env_file_profile}'.[/]"
             )
-        else:
-            local_env["DATABRICKS_CONFIG_PROFILE"] = obj.profile
-            env_file_profile = env_file.get("DATABRICKS_CONFIG_PROFILE")
-            if env_file_profile and env_file_profile != obj.profile:
-                render.console().print(
-                    f"[dim]The agent will run with profile '{obj.profile}' "
-                    f"(from {obj.profile_source}), not .env's '{env_file_profile}'.[/]"
-                )
     # Local tracing: start a local MLflow tracking server backed by sqlite under .agentbricks/ and point the
     # agent at it via the dev-only manifest — for any project, regardless of framework/server. An agent
     # that uses MLflow (autolog or `start_trace`) then traces to it; it's harmless for one that doesn't.
@@ -201,15 +204,18 @@ def dev(
 
         # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
         # misleading for an API-only project, which serves no page there (404). Print an accurate line up
-        # front, keyed on whether this project actually carries the chat-app overlay.
+        # front, keyed on whether this project actually carries the chat-app overlay. When `.env`
+        # credentials win, the resolved profile/host would point at a different workspace than the
+        # agent actually uses — the dim note above already covers that case.
+        announce_profile = None if uses_env_credentials else obj.profile
         _announce_local_url(
             source_dir,
             app_port or _DEFAULT_APP_PORT,
             project.server if project else None,
             trace_url,
-            profile=obj.profile,
+            profile=announce_profile,
             profile_source=obj.profile_source,
-            host=profile_host(obj.profile),
+            host=profile_host(announce_profile),
         )
 
         # Run in the project dir so run-local finds the app; stream output (no capture).

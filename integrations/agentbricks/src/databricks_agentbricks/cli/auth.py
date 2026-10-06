@@ -16,6 +16,7 @@ import dataclasses
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from typing import Optional
@@ -52,6 +53,9 @@ def _parse_env_file(path: pathlib.Path) -> dict[str, str]:
         key, value = key.strip(), value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
             value = value[1:-1]
+        else:
+            # Match dotenv for unquoted values: a `#` that follows whitespace starts a comment.
+            value = re.split(r"\s+#", value, maxsplit=1)[0].rstrip()
         if key:
             values[key] = value
     return values
@@ -93,14 +97,15 @@ def profile_host(profile: Optional[str]) -> Optional[str]:
     """
     if not profile:
         return None
+    # The SDK expands `~` in DATABRICKS_CONFIG_FILE; without it a tilde path reads nothing.
     config_path = pathlib.Path(
-        os.getenv("DATABRICKS_CONFIG_FILE", pathlib.Path.home() / ".databrickscfg")
-    )
+        os.getenv("DATABRICKS_CONFIG_FILE", str(pathlib.Path.home() / ".databrickscfg"))
+    ).expanduser()
     parser = configparser.ConfigParser()
     try:
         parser.read(config_path)
         return parser.get(profile, "host", fallback=None)
-    except Exception:  # noqa: BLE001 - never fail a command over a display-only host lookup
+    except (OSError, configparser.Error):
         return None
 
 
