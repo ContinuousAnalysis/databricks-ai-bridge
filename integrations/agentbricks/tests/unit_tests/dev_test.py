@@ -8,7 +8,7 @@ from unittest import mock
 
 import pytest
 import yaml
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
 
 from databricks_agentbricks.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.cli import dev as dev_mod
@@ -646,7 +646,7 @@ def _capture_dev_manifest(monkeypatch, tmp_path: pathlib.Path) -> dict:
     return captured
 
 
-def _run_dev(tmp_path: pathlib.Path, ctx) -> None:
+def _run_dev(tmp_path: pathlib.Path, ctx) -> Result:
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": []}))
     (tmp_path / ".venv").mkdir()  # skip the environment build
     return CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=ctx)
