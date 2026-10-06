@@ -2,14 +2,17 @@
 
 `login` validates a named profile and persists the selection; when credentials are missing or
 rejected in an interactive terminal, it delegates setup to `databricks auth login` and retries.
-The root group falls back to the saved profile whenever `-p` is omitted. Without a saved profile,
-the Databricks SDK performs its normal default authentication resolution. `logout` removes only
-Agent Bricks' saved selection, not the underlying credentials. State lives in a small JSON file under
-`~/.agentbricks` (override the directory with `AGENTBRICKS_CONFIG_HOME`, mainly for tests).
+Commands resolve their profile with `resolve_profile`: the `-p` flag, then the saved `agentbricks login`
+selection, then `DATABRICKS_CONFIG_PROFILE`, then the project `.env` (project-aware commands only),
+then the Databricks SDK's own default authentication. `logout` removes only Agent Bricks' saved
+selection, not the underlying credentials. State lives in a small JSON file under `~/.agentbricks`
+(override the directory with `AGENTBRICKS_CONFIG_HOME`, mainly for tests).
 """
 
 from __future__ import annotations
 
+import configparser
+import dataclasses
 import json
 import os
 import pathlib
@@ -22,6 +25,83 @@ import click
 from databricks_agentbricks import render
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentkit._api_client import _AgentBricksApiClient
+
+
+@dataclasses.dataclass(frozen=True)
+class ResolvedProfile:
+    """The profile a command runs with, and where it came from (for display and re-resolution)."""
+
+    name: Optional[str]
+    source: str
+
+
+def _parse_env_file(path: pathlib.Path) -> dict[str, str]:
+    """Minimal KEY=VALUE reader for a project `.env` (python-dotenv is not a CLI dependency)."""
+    values: dict[str, str] = {}
+    try:
+        text = path.read_text()
+    except OSError:
+        return values
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key:
+            values[key] = value
+    return values
+
+
+def resolve_profile(
+    flag: Optional[str], project_dir: Optional[pathlib.Path] = None
+) -> ResolvedProfile:
+    """Pick the Databricks profile for a command, most to least specific.
+
+    1. the `-p/--profile` flag,
+    2. the profile saved by `agentbricks login`,
+    3. the `DATABRICKS_CONFIG_PROFILE` environment variable,
+    4. the project `.env`'s `DATABRICKS_CONFIG_PROFILE` (only when `project_dir` is given — the
+       project-aware commands `dev` and `deploy` pass their source dir so the CLI and the locally
+       running agent, which reads the same `.env`, agree on one profile),
+    5. none — the Databricks SDK's own default authentication resolution.
+    """
+    if flag:
+        return ResolvedProfile(flag, "--profile")
+    saved = load_default_profile()
+    if saved:
+        return ResolvedProfile(saved, "agentbricks login")
+    env_profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
+    if env_profile:
+        return ResolvedProfile(env_profile, "DATABRICKS_CONFIG_PROFILE")
+    if project_dir is not None:
+        file_profile = _parse_env_file(project_dir / ".env").get("DATABRICKS_CONFIG_PROFILE")
+        if file_profile:
+            return ResolvedProfile(file_profile, ".env")
+    return ResolvedProfile(None, "Databricks SDK default")
+
+
+def profile_host(profile: Optional[str]) -> Optional[str]:
+    """Host configured for a profile in the Databricks config file, for display only.
+
+    Honors `DATABRICKS_CONFIG_FILE` (default `~/.databrickscfg`) the same way the SDK client does.
+    Display-only, so any problem — missing file, missing profile, missing host — yields None.
+    """
+    if not profile:
+        return None
+    config_path = pathlib.Path(
+        os.getenv("DATABRICKS_CONFIG_FILE", pathlib.Path.home() / ".databrickscfg")
+    )
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(config_path)
+        return parser.get(profile, "host", fallback=None)
+    except Exception:  # noqa: BLE001 - never fail a command over a display-only host lookup
+        return None
 
 
 def _config_file() -> pathlib.Path:

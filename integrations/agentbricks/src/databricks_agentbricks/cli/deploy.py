@@ -38,6 +38,7 @@ from databricks_agentbricks.cli.app_auth import (
     required_user_api_scopes,
     requires_user_auth,
 )
+from databricks_agentbricks.cli.auth import profile_host
 from databricks_agentbricks.cli.endpoint_examples import print_agent_invoke_command
 from databricks_agentbricks.cli.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
@@ -541,6 +542,9 @@ def deploy(
     project = _load_project(source_dir)
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
+    # Fold the project's `.env` into the profile resolution before the profile is used, matching
+    # `agentbricks dev` so both commands deploy and run against the same workspace.
+    obj.use_project(source_dir)
     user_auth = requires_user_auth(project)
     requested_name = name
     base_name = _resolve_deployment_name(project, name)
@@ -880,6 +884,11 @@ def deploy(
         provisioned["Trace access"] = "granted to agent runtime service principal"
     fields = {"URL": app_url} if app_url else {}
     fields.update({"Workspace path": ws_path, **provisioned})
+    if obj.profile:
+        fields["Profile"] = f"{obj.profile} (from {obj.profile_source})"
+        host = profile_host(obj.profile)
+        if host:
+            fields["Host"] = host
     render.success(
         f"Deployed agent '{name}'",
         fields=fields,

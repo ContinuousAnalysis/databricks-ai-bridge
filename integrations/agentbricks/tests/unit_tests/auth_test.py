@@ -185,3 +185,91 @@ def test_logout_clears_saved_profile(tmp_path, monkeypatch):
     result = CliRunner().invoke(auth.logout, [], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert auth.load_default_profile() is None
+
+
+# --- profile resolution (see resolve_profile) -------------------------------------
+
+
+def _hermetic_resolution(monkeypatch, tmp_path):
+    """Keep resolve_profile off this machine's env / saved login; layers are added by each test."""
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
+    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path / "agentbricks-home"))
+
+
+def test_resolve_profile_precedence_matrix(tmp_path, monkeypatch):
+    _hermetic_resolution(monkeypatch, tmp_path)
+
+    # Nothing anywhere: the Databricks SDK's own default chain.
+    assert auth.resolve_profile(None) == auth.ResolvedProfile(None, "Databricks SDK default")
+
+    home = tmp_path / "agentbricks-home"
+    home.mkdir()
+    (home / "config.json").write_text(json.dumps({"profile": "saved"}))
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".env").write_text("DATABRICKS_CONFIG_PROFILE=from-dotenv\n")
+
+    # The saved login outranks the env var and the project .env; an empty env var counts as unset.
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "")
+    assert auth.resolve_profile(None, project) == auth.ResolvedProfile("saved", "agentbricks login")
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "from-env")
+    assert auth.resolve_profile(None, project) == auth.ResolvedProfile("saved", "agentbricks login")
+
+    # Without a saved login: the env var beats the .env.
+    (home / "config.json").unlink()
+    assert auth.resolve_profile(None, project) == auth.ResolvedProfile(
+        "from-env", "DATABRICKS_CONFIG_PROFILE"
+    )
+
+    # The .env applies only below the env var, and only when its dir is given (project-aware commands).
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE")
+    assert auth.resolve_profile(None, project) == auth.ResolvedProfile("from-dotenv", ".env")
+    assert auth.resolve_profile(None) == auth.ResolvedProfile(None, "Databricks SDK default")
+
+    # The -p flag beats everything.
+    (home / "config.json").write_text(json.dumps({"profile": "saved"}))
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "from-env")
+    assert auth.resolve_profile("flag", project) == auth.ResolvedProfile("flag", "--profile")
+
+
+def test_parse_env_file_edge_cases(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text(
+        "# a comment\n"
+        "\n"
+        "PLAIN=value\n"
+        "export EXPORTED=exported-value\n"
+        'DQ="double quoted"\n'
+        "SQ='single quoted'\n"
+        "SPACED =  padded  \n"
+        "a line without an equals sign\n"
+    )
+    assert auth._parse_env_file(env) == {
+        "PLAIN": "value",
+        "EXPORTED": "exported-value",
+        "DQ": "double quoted",
+        "SQ": "single quoted",
+        "SPACED": "padded",
+    }
+    assert auth._parse_env_file(tmp_path / "absent.env") == {}
+
+
+def test_profile_host_honors_databricks_config_file(tmp_path, monkeypatch):
+    config = tmp_path / "databrickscfg"
+    config.write_text(
+        "[primary]\nhost = https://primary.databricks.com\n\n"
+        "[other]\nhost = https://other.databricks.com\n"
+    )
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(config))
+
+    assert auth.profile_host("other") == "https://other.databricks.com"
+    assert auth.profile_host("no-such-profile") is None
+    assert auth.profile_host(None) is None
+
+    # Display-only: a missing file or a broken config yields None, never an error.
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(tmp_path / "absent"))
+    assert auth.profile_host("primary") is None
+    broken = tmp_path / "broken"
+    broken.write_text("= = =\nnot ini at all\n")
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(broken))
+    assert auth.profile_host("primary") is None

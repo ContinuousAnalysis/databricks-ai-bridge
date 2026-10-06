@@ -394,3 +394,40 @@ def test_root_help_groups_commands_by_intent():
     assert "login" in setup_to_develop and "init" in setup_to_develop
     ship_onward = out[out.index("SHIP") :]
     assert "deploy" in ship_onward
+
+
+def test_root_context_resolves_saved_login_over_env_var(tmp_path, monkeypatch):
+    # The root group's context resolution (see auth.resolve_profile): the profile saved by
+    # `agentbricks login` beats DATABRICKS_CONFIG_PROFILE, and -p beats both.
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
+    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path / "agentbricks-home"))
+    (tmp_path / "agentbricks-home").mkdir()
+    (tmp_path / "agentbricks-home" / "config.json").write_text('{"profile": "saved"}')
+
+    ctx = cli.CliContext(profile=None, output="text")
+    assert (ctx.profile, ctx.profile_source) == ("saved", "agentbricks login")
+
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "from-env")
+    ctx = cli.CliContext(profile=None, output="text")
+    assert (ctx.profile, ctx.profile_source) == ("saved", "agentbricks login")
+
+    ctx = cli.CliContext(profile="flag", output="text")
+    assert (ctx.profile, ctx.profile_source) == ("flag", "--profile")
+
+    # use_project folds in the project .env layer, but only below -p, the saved login, and the
+    # env var.
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".env").write_text("DATABRICKS_CONFIG_PROFILE=from-dotenv\n")
+    ctx = cli.CliContext(profile=None, output="text")
+    ctx.use_project(project)
+    assert (ctx.profile, ctx.profile_source) == ("saved", "agentbricks login")
+    ctx = cli.CliContext(profile="flag", output="text")
+    ctx.use_project(project)
+    assert (ctx.profile, ctx.profile_source) == ("flag", "--profile")
+    # With no saved login and no env var, the .env profile is the resolution.
+    (tmp_path / "agentbricks-home" / "config.json").unlink()
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE")
+    ctx = cli.CliContext(profile=None, output="text")
+    ctx.use_project(project)
+    assert (ctx.profile, ctx.profile_source) == ("from-dotenv", ".env")

@@ -16,6 +16,7 @@ import click
 import yaml
 
 from databricks_agentbricks import render
+from databricks_agentbricks.cli.auth import _parse_env_file, profile_host
 from databricks_agentbricks.cli.deploy import (
     _load_project,
     resource_bindings,
@@ -82,7 +83,8 @@ def dev(
     reach it: the chat UI if the project has one, otherwise a sample request against the agent's
     API.
 
-    Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model
+    Auth uses your Databricks profile, resolved in this order: `-p`, `agentbricks login`,
+    `DATABRICKS_CONFIG_PROFILE`, then the project's `.env`. The agent reaches Databricks model
     serving through the AI Gateway on that profile — so there are no model keys to set up.
 
     Under the hood this wraps `databricks apps run-local`: it reads the command + env from
@@ -106,6 +108,11 @@ def dev(
             f"No app.yaml found at {app_yaml}.",
             hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
         )
+
+    # Fold the project's `.env` into the profile resolution before the profile is used, so the CLI
+    # and the locally running agent (which reads that same `.env`) agree on one profile.
+    obj.use_project(source_dir)
+    env_file = _parse_env_file(source_dir / ".env")
 
     project = _load_project(source_dir)
     if project is not None and project.tools:
@@ -134,6 +141,24 @@ def dev(
             "traces to a local MLflow server. Run `agentbricks deploy` to trace to the bound experiment.[/]"
         )
     local_env: dict[str, str] = {}
+    if obj.profile:
+        # Land the resolved profile in the dev manifest — i.e. the agent's process env, where it
+        # beats `.env` because the template loads dotenv with override=False — so the agent runs
+        # with the same profile the CLI resolved. Explicit credentials in `.env` are the one
+        # exception: don't mix them with a profile env var.
+        if env_file.get("DATABRICKS_HOST") or env_file.get("DATABRICKS_TOKEN"):
+            render.console().print(
+                "[dim]The agent authenticates with the DATABRICKS_HOST/TOKEN credentials in "
+                ".env, not the resolved profile.[/]"
+            )
+        else:
+            local_env["DATABRICKS_CONFIG_PROFILE"] = obj.profile
+            env_file_profile = env_file.get("DATABRICKS_CONFIG_PROFILE")
+            if env_file_profile and env_file_profile != obj.profile:
+                render.console().print(
+                    f"[dim]The agent will run with profile '{obj.profile}' "
+                    f"(from {obj.profile_source}), not .env's '{env_file_profile}'.[/]"
+                )
     # Local tracing: start a local MLflow tracking server backed by sqlite under .agentbricks/ and point the
     # agent at it via the dev-only manifest — for any project, regardless of framework/server. An agent
     # that uses MLflow (autolog or `start_trace`) then traces to it; it's harmless for one that doesn't.
@@ -182,6 +207,9 @@ def dev(
             app_port or _DEFAULT_APP_PORT,
             project.server if project else None,
             trace_url,
+            profile=obj.profile,
+            profile_source=obj.profile_source,
+            host=profile_host(obj.profile),
         )
 
         # Run in the project dir so run-local finds the app; stream output (no capture).
@@ -201,12 +229,19 @@ def dev(
 
 
 def _announce_local_url(
-    source_dir: pathlib.Path, port: int, server: AgentServer | None, trace_url: str | None = None
+    source_dir: pathlib.Path,
+    port: int,
+    server: AgentServer | None,
+    trace_url: str | None = None,
+    profile: str | None = None,
+    profile_source: str | None = None,
+    host: str | None = None,
 ) -> None:
     """Print how to reach the running app: the chat UI if present, else a sample invoke request.
 
     ``trace_url`` (when tracing is on) is shown alongside so a dev run surfaces where its traces land,
-    matching the ``Traces`` line ``agentbricks deploy`` prints.
+    matching the ``Traces`` line ``agentbricks deploy`` prints. ``profile``/``host`` surface which
+    workspace the run is against.
     """
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
@@ -215,8 +250,16 @@ def _announce_local_url(
         if server == AgentServer.CUSTOM
         else ("agentbricks tools add mcp <service>", "Give the agent a tool")
     )
+
+    def _auth_fields(fields: dict[str, str]) -> None:
+        if profile:
+            fields["Profile"] = f"{profile} (from {profile_source})"
+            if host:
+                fields["Host"] = host
+
     if (source_dir / "runtime" / "ui.py").is_file():
         fields = {"Chat UI": base}
+        _auth_fields(fields)
         if trace_url:
             fields["Traces"] = trace_url
         render.success(
@@ -241,6 +284,7 @@ def _announce_local_url(
         )
         sample = f"curl -X POST {endpoint} -H 'Content-Type: application/json' -d '{body}'"
         fields = {"Invoke": f"POST {endpoint}"}
+        _auth_fields(fields)
         if trace_url:
             fields["Traces"] = trace_url
         render.success(

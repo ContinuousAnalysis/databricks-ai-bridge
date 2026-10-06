@@ -119,7 +119,13 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
     calls.attach_mock(client, "runtime")
     calls.attach_mock(cli, "cli")
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="json", client=lambda: client)
+    ctx = types.SimpleNamespace(
+        use_project=lambda project_dir: None,
+        profile="prof",
+        profile_source="--profile",
+        output="json",
+        client=lambda: client,
+    )
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
@@ -146,7 +152,13 @@ def test_managed_cleanup_errors_retain_the_app(monkeypatch, operation, error_cod
     getattr(client, operation).side_effect = AgentCliError("cleanup failed", error_code=error_code)
     cli = mock.Mock()
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
+    ctx = types.SimpleNamespace(
+        use_project=lambda project_dir: None,
+        profile="prof",
+        profile_source="--profile",
+        output="text",
+        client=lambda: client,
+    )
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
@@ -164,7 +176,13 @@ def test_managed_store_already_absent_allows_app_deletion(monkeypatch, operation
     getattr(client, operation).side_effect = AgentCliError("absent", error_code="NOT_FOUND")
     cli = mock.Mock()
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
+    ctx = types.SimpleNamespace(
+        use_project=lambda project_dir: None,
+        profile="prof",
+        profile_source="--profile",
+        output="text",
+        client=lambda: client,
+    )
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
@@ -179,7 +197,13 @@ def test_managed_delete_rejects_a_different_owner(monkeypatch):
     client.get_runtime_store.return_value = _runtime_store_response(sp="different-sp")
     cli = mock.Mock()
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
+    ctx = types.SimpleNamespace(
+        use_project=lambda project_dir: None,
+        profile="prof",
+        profile_source="--profile",
+        output="text",
+        client=lambda: client,
+    )
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
@@ -197,7 +221,13 @@ def test_managed_delete_rejects_an_unexpected_resource_name(monkeypatch):
     client.get_runtime_store.return_value = resource
     cli = mock.Mock()
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
+    ctx = types.SimpleNamespace(
+        use_project=lambda project_dir: None,
+        profile="prof",
+        profile_source="--profile",
+        output="text",
+        client=lambda: client,
+    )
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
@@ -212,7 +242,13 @@ def test_managed_delete_cannot_skip_cleanup_when_identity_lookup_fails(monkeypat
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: None)
     cli = mock.Mock()
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=mock.Mock())
+    ctx = types.SimpleNamespace(
+        use_project=lambda project_dir: None,
+        profile="prof",
+        profile_source="--profile",
+        output="text",
+        client=mock.Mock(),
+    )
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
@@ -228,7 +264,13 @@ def test_legacy_delete_preserves_existing_behavior(monkeypatch):
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
     cli = mock.Mock()
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=mock.Mock())
+    ctx = types.SimpleNamespace(
+        use_project=lambda project_dir: None,
+        profile="prof",
+        profile_source="--profile",
+        output="text",
+        client=mock.Mock(),
+    )
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx

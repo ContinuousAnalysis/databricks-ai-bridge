@@ -6,12 +6,13 @@ Root Click group. Global `--profile` and `--output` flow to every subcommand via
 
 from __future__ import annotations
 
+import pathlib
 from typing import Optional
 
 import click
 
 from databricks_agentbricks import errors
-from databricks_agentbricks.cli.auth import load_default_profile, login, logout
+from databricks_agentbricks.cli.auth import login, logout, resolve_profile
 from databricks_agentbricks.cli.deploy import deploy, deployments
 from databricks_agentbricks.cli.dev import dev
 from databricks_agentbricks.cli.doctor import doctor
@@ -29,9 +30,26 @@ class CliContext:
     """Shared per-invocation state: selected profile, output mode, lazily-built client."""
 
     def __init__(self, profile: Optional[str], output: str):
-        self.profile = profile
+        resolved = resolve_profile(profile)
+        self.profile = resolved.name
+        self.profile_source = resolved.source
         self.output = output
+        # use_project re-resolves from the raw flag so -p, the saved login, and the env var all
+        # stay ahead of the project .env.
+        self._profile_flag = profile
         self._client: Optional[_AgentBricksApiClient] = None
+
+    def use_project(self, project_dir: pathlib.Path) -> None:
+        """Re-resolve with the project's `.env` layer (see `resolve_profile`) before using the profile.
+
+        Project-aware commands (`dev`, `deploy`) call this with their source dir; the `.env`
+        profile applies only below `-p`, the saved login, and `DATABRICKS_CONFIG_PROFILE`.
+        """
+        resolved = resolve_profile(self._profile_flag, project_dir)
+        if resolved.name != self.profile:
+            self._client = None
+        self.profile = resolved.name
+        self.profile_source = resolved.source
 
     def client(self) -> _AgentBricksApiClient:
         if self._client is None:
@@ -64,8 +82,10 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
     authenticated command.
 
     New here? The examples below take you from an empty directory to a deployed agent. Agent Bricks
-    authenticates with a Databricks profile: run `agentbricks login` once to save a default, or pass
-    --profile / -p (without one, the Databricks SDK's default authentication is used).
+    authenticates with a Databricks profile: run `agentbricks login` once to save a default (it wins
+    over DATABRICKS_CONFIG_PROFILE and, for `dev` and `deploy`, the project's .env), or pass
+    --profile / -p to override it (without any of these, the Databricks SDK's default
+    authentication is used).
 
     Agents built with Agent Bricks combine the platform's capabilities:
 
@@ -83,7 +103,7 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
     """
     # Let errors render to match the selected output mode (JSON errors for -o json).
     errors.set_output_mode(output)
-    ctx.obj = CliContext(profile=profile or load_default_profile(), output=output)
+    ctx.obj = CliContext(profile=profile, output=output)
 
 
 agentbricks.add_command(login)

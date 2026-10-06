@@ -320,7 +320,8 @@ def _prepare_migration(
     "--profile",
     default=None,
     help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `agentbricks dev` works "
-    "immediately (defaults to the profile from -p / `agentbricks login`).",
+    "immediately (defaults to the resolved profile from -p / `agentbricks login` / "
+    "DATABRICKS_CONFIG_PROFILE).",
 )
 @click.option(
     "--disable-chat-app",

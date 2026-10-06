@@ -12,6 +12,7 @@ from click.testing import CliRunner
 
 from databricks_agentbricks.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.cli import dev as dev_mod
+from databricks_agentbricks.cli.auth import resolve_profile
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import write_project_metadata
 
@@ -38,9 +39,26 @@ class _Ctx:
     def __init__(self, output: str = "text", profile=None):
         self.output = output
         self.profile = profile
+        self.profile_source = "--profile" if profile else "Databricks SDK default"
+
+    def use_project(self, project_dir):
+        # Stand-in for CliContext.use_project: the pre-project profile acts as the -p flag.
+        resolved = resolve_profile(self.profile, project_dir)
+        self.profile, self.profile_source = resolved.name, resolved.source
 
     def client(self):
         return mock.Mock(current_user="me@example.com", host="https://my-workspace.databricks.com")
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_profile(monkeypatch, tmp_path):
+    """dev re-resolves the profile (obj.use_project), which consults DATABRICKS_CONFIG_PROFILE and the
+    saved `agentbricks login` selection — keep both off this machine's state. The host lookup reads
+    DATABRICKS_CONFIG_FILE, so point that at an absent file. Tests that want them set their own
+    values after this fixture runs."""
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
+    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path / "agentbricks-home"))
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(tmp_path / "databrickscfg"))
 
 
 @pytest.fixture(autouse=True)
@@ -344,6 +362,10 @@ def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
     class _OfflineCtx:
         output = "text"
         profile = None
+        profile_source = "Databricks SDK default"
+
+        def use_project(self, project_dir):
+            pass
 
         def client(self):
             raise AgentCliError("no databricks auth configured")
@@ -606,3 +628,107 @@ def test_dev_notes_bound_tracing_experiment(tmp_path: pathlib.Path):
     out = " ".join(result.output.split())  # collapse rich line-wrapping
     assert "Tracing experiment '/Shared/agentbricks_traces/mine' is bound" in out
     assert "Run `agentbricks deploy` to trace to the bound experiment" in out
+
+
+# --- profile resolution for the locally running agent ------------------------------
+
+
+def _capture_dev_manifest(monkeypatch, tmp_path: pathlib.Path) -> dict:
+    """Run dev with _databricks stubbed, returning the dev-only manifest it handed to run-local."""
+    captured: dict = {}
+
+    def _fake_databricks(args, *a, **kw):
+        dev_yaml = pathlib.Path(kw["cwd"]) / "app.agentbricksdev.yaml"
+        captured.update(yaml.safe_load(dev_yaml.read_text()))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(dev_mod, "_databricks", _fake_databricks)
+    return captured
+
+
+def _run_dev(tmp_path: pathlib.Path, ctx) -> None:
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": []}))
+    (tmp_path / ".venv").mkdir()  # skip the environment build
+    return CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=ctx)
+
+
+def test_dev_manifest_carries_resolved_profile(tmp_path: pathlib.Path, monkeypatch):
+    # The resolved profile lands in the dev manifest (the agent's process env), where it beats
+    # `.env`'s dotenv(override=False) load — so the agent runs on the same profile as the CLI.
+    captured = _capture_dev_manifest(monkeypatch, tmp_path)
+    result = _run_dev(tmp_path, _Ctx(profile="ml"))
+
+    assert result.exit_code == 0, result.output
+    env = {e["name"]: e["value"] for e in captured["env"]}
+    assert env["DATABRICKS_CONFIG_PROFILE"] == "ml"
+    assert "ml (from --profile)" in result.output
+
+
+def test_dev_manifest_carries_env_file_profile_when_unspecified(tmp_path, monkeypatch):
+    # No -p and no env var: the project's .env profile is the resolution, and it flows to the agent.
+    (tmp_path / ".env").write_text("DATABRICKS_CONFIG_PROFILE=from-dotenv\n")
+    captured = _capture_dev_manifest(monkeypatch, tmp_path)
+    result = _run_dev(tmp_path, _Ctx())
+
+    assert result.exit_code == 0, result.output
+    env = {e["name"]: e["value"] for e in captured["env"]}
+    assert env["DATABRICKS_CONFIG_PROFILE"] == "from-dotenv"
+    assert "from-dotenv (from .env)" in result.output
+
+
+def test_dev_manifest_omits_profile_when_env_file_has_credentials(tmp_path, monkeypatch):
+    # Explicit DATABRICKS_HOST/TOKEN in .env: don't mix in a profile env var; the agent uses those.
+    (tmp_path / ".env").write_text(
+        "DATABRICKS_HOST=https://workspace.databricks.com\nDATABRICKS_TOKEN=dapi123\n"
+    )
+    captured = _capture_dev_manifest(monkeypatch, tmp_path)
+    result = _run_dev(tmp_path, _Ctx(profile="ml"))
+
+    assert result.exit_code == 0, result.output
+    env = {e["name"]: e["value"] for e in captured["env"]}
+    assert "DATABRICKS_CONFIG_PROFILE" not in env
+    output = " ".join(result.output.split())
+    assert "credentials in .env" in output
+
+
+def test_dev_warns_when_flag_overrides_env_file_profile(tmp_path, monkeypatch):
+    # .env points at one profile but -p (or the env var) won: say which one actually runs.
+    (tmp_path / ".env").write_text("DATABRICKS_CONFIG_PROFILE=from-dotenv\n")
+    captured = _capture_dev_manifest(monkeypatch, tmp_path)
+    result = _run_dev(tmp_path, _Ctx(profile="ml"))
+
+    assert result.exit_code == 0, result.output
+    env = {e["name"]: e["value"] for e in captured["env"]}
+    assert env["DATABRICKS_CONFIG_PROFILE"] == "ml"
+    output = " ".join(result.output.split())
+    assert "with profile 'ml' (from --profile), not .env's 'from-dotenv'" in output
+
+
+def test_dev_warns_when_env_var_overrides_env_file_profile(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("DATABRICKS_CONFIG_PROFILE=from-dotenv\n")
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "from-env")
+    captured = _capture_dev_manifest(monkeypatch, tmp_path)
+    result = _run_dev(tmp_path, _Ctx())
+
+    assert result.exit_code == 0, result.output
+    env = {e["name"]: e["value"] for e in captured["env"]}
+    assert env["DATABRICKS_CONFIG_PROFILE"] == "from-env"
+    output = " ".join(result.output.split())
+    assert (
+        "with profile 'from-env' (from DATABRICKS_CONFIG_PROFILE), not .env's 'from-dotenv'"
+        in output
+    )
+
+
+def test_dev_announces_host_for_resolved_profile(tmp_path, monkeypatch):
+    config = tmp_path / "databrickscfg"
+    config.write_text("[ml]\nhost = https://ml-workspace.databricks.com\n")
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(config))
+    monkeypatch.setattr(dev_mod, "_databricks", mock.Mock())
+
+    result = _run_dev(tmp_path, _Ctx(profile="ml"))
+
+    assert result.exit_code == 0, result.output
+    output = " ".join(result.output.split())
+    assert "ml (from --profile)" in output
+    assert "https://ml-workspace.databricks.com" in output

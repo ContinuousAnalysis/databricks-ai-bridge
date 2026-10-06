@@ -111,6 +111,14 @@ If Databricks SDK default authentication is already configured, you can skip `ag
 You can also pass the global `--profile/-p` option before an individual command, for example
 `agentbricks --profile <profile> tools list`. Use `--output json` for scripting.
 
+The profile is resolved in this order, most to least specific: the `--profile/-p` flag, the profile
+saved by `agentbricks login`, the `DATABRICKS_CONFIG_PROFILE` environment variable, the project
+`.env`'s `DATABRICKS_CONFIG_PROFILE` (only for the project-aware `dev` and `deploy` commands, which
+resolve against their source directory so the CLI and the locally running agent use one profile),
+and finally the Databricks SDK's default authentication resolution. `dev`
+passes the resolved profile to the agent (unless `.env` sets `DATABRICKS_HOST`/`DATABRICKS_TOKEN`)
+and prints the resolved profile and its host; `deploy` prints them in its success output.
+
 ## Quickstart
 
 The shortest path from a blank directory to a running and deployed agent:

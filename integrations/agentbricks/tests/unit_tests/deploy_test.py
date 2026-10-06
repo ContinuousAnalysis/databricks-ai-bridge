@@ -13,6 +13,7 @@ from click.testing import CliRunner
 
 from databricks_agentbricks.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.cli import deploy as deploy_mod
+from databricks_agentbricks.cli.auth import resolve_profile
 from databricks_agentbricks.cli.tracing import MLflowTraceTables, ResolvedTraceExperiment
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import write_project_metadata
@@ -272,7 +273,11 @@ class _FakeClient:
 
 class _FakeCtx:
     profile = "prof"
+    profile_source = "--profile"
     output = "text"
+
+    def use_project(self, project_dir):
+        pass  # these tests pin the profile directly; re-resolution is covered by its own tests
 
     def client(self):
         return _FakeClient()
@@ -646,7 +651,13 @@ def test_deploy_defaults_to_legacy_runtime_store(tmp_path: pathlib.Path, monkeyp
             events.append(args[0]) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
         ),
     )
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
+    ctx = types.SimpleNamespace(
+        profile="prof",
+        profile_source="--profile",
+        output="text",
+        use_project=lambda project_dir: None,
+        client=lambda: client,
+    )
 
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=ctx)
 
@@ -719,7 +730,13 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_managed_store(
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
+    ctx = types.SimpleNamespace(
+        profile="prof",
+        profile_source="--profile",
+        output="text",
+        use_project=lambda project_dir: None,
+        client=lambda: client,
+    )
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=ctx)
 
     assert result.exit_code == 0, result.output
@@ -1728,3 +1745,44 @@ def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):
     env = {e["name"]: e["value"] for e in env_entries}
     assert env["AGENT_SESSION_STORE"] == "bound-sess"
     assert "AGENT_MEMORY_STORE" not in env
+
+
+def test_deploy_re_resolves_profile_from_project_env_file(tmp_path: pathlib.Path, monkeypatch):
+    # deploy folds the project's .env into the profile resolution before the profile is used (so it
+    # deploys against the workspace the locally-run agent uses) and reports the winner + its host.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / ".env").write_text("DATABRICKS_CONFIG_PROFILE=from-dotenv\n")
+    (tmp_path / "databrickscfg").write_text(
+        "[from-dotenv]\nhost = https://from-dotenv.databricks.com\n"
+    )
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
+    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path / "agentbricks-home"))
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(tmp_path / "databrickscfg"))
+
+    profiles: list[str] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: profiles.append(p) or False)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda name, profile: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kwargs: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    class _EnvCtx(_FakeCtx):
+        profile = None
+        profile_source = "Databricks SDK default"
+
+        def use_project(self, project_dir):
+            # Real re-resolution from no flag, as CliContext.use_project does for an unset -p.
+            resolved = resolve_profile(None, project_dir)
+            self.profile, self.profile_source = resolved.name, resolved.source
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_EnvCtx())
+
+    assert result.exit_code == 0, result.output
+    assert profiles and all(p == "from-dotenv" for p in profiles)
+    output = " ".join(result.output.split())
+    assert "from-dotenv (from .env)" in output
+    assert "https://from-dotenv.databricks.com" in output

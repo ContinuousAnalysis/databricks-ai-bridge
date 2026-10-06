@@ -110,7 +110,13 @@ def test_scope_update_flag_accepts_declarative_user_auth(tmp_path, monkeypatch):
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["agent-bricks-test", "--source", str(tmp_path), "--allow-user-scope-update"],
-        obj=SimpleNamespace(profile="selected", output="text", client=client),
+        obj=SimpleNamespace(
+            use_project=lambda project_dir: None,
+            profile="selected",
+            profile_source="--profile",
+            output="text",
+            client=client,
+        ),
     )
 
     assert result.exit_code != 0
@@ -126,7 +132,13 @@ def test_user_auth_requires_explicit_auth_on_every_managed_binding(tmp_path, mon
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path)],
-        obj=SimpleNamespace(profile="selected", output="text", client=client),
+        obj=SimpleNamespace(
+            use_project=lambda project_dir: None,
+            profile="selected",
+            profile_source="--profile",
+            output="text",
+            client=client,
+        ),
     )
     assert result.exit_code != 0
     assert "explicit auth" in result.output
@@ -140,7 +152,13 @@ def test_invalid_auth_fails_before_cloud_or_stores(tmp_path, monkeypatch):
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path)],
-        obj=SimpleNamespace(profile="selected", output="text", client=client),
+        obj=SimpleNamespace(
+            use_project=lambda project_dir: None,
+            profile="selected",
+            profile_source="--profile",
+            output="text",
+            client=client,
+        ),
     )
     assert result.exit_code != 0
     assert "auth" in result.output
@@ -298,7 +316,13 @@ def test_existing_app_requires_explicit_scope_update_permission(tmp_path, monkey
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["agent-bricks-test", "--source", str(tmp_path)],
-        obj=SimpleNamespace(profile="selected", output="text", client=client),
+        obj=SimpleNamespace(
+            use_project=lambda project_dir: None,
+            profile="selected",
+            profile_source="--profile",
+            output="text",
+            client=client,
+        ),
     )
     assert result.exit_code != 0
     assert "--allow-user-scope-update" in result.output
@@ -541,7 +565,13 @@ def test_disabled_forwarding_fails_deploy_before_app_or_store_mutations(tmp_path
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["agent-bricks-test", "--source", str(tmp_path), "--allow-user-scope-update"],
-        obj=SimpleNamespace(profile="selected", output="text", client=client),
+        obj=SimpleNamespace(
+            use_project=lambda project_dir: None,
+            profile="selected",
+            profile_source="--profile",
+            output="text",
+            client=client,
+        ),
     )
     assert result.exit_code != 0
     assert "forward_user_access_token" in result.output
@@ -606,7 +636,13 @@ def test_app_only_tools_keep_deployment_path(tmp_path, monkeypatch, auth, _no_re
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path)],
-        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+        obj=SimpleNamespace(
+            use_project=lambda project_dir: None,
+            profile="selected",
+            profile_source="--profile",
+            output="text",
+            client=lambda: client,
+        ),
     )
     assert result.exit_code == 0, result.output
     workspace.assert_not_called()
@@ -651,7 +687,13 @@ def test_user_deploy_creates_scoped_app_and_runtime_store_before_source(
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path), "--instances", "2"],
-        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+        obj=SimpleNamespace(
+            use_project=lambda project_dir: None,
+            profile="selected",
+            profile_source="--profile",
+            output="text",
+            client=lambda: client,
+        ),
     )
     assert result.exit_code == 0, result.output
     workspace.assert_called_once_with(profile="selected")
@@ -717,7 +759,13 @@ def test_app_auth_reconciles_explicit_access_before_source_rollout(
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path)],
-        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+        obj=SimpleNamespace(
+            use_project=lambda project_dir: None,
+            profile="selected",
+            profile_source="--profile",
+            output="text",
+            client=lambda: client,
+        ),
     )
 
     assert result.exit_code == 0, result.output
@@ -785,7 +833,13 @@ def test_deploy_keeps_old_tool_resources_when_rollout_fails(
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path)],
-        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+        obj=SimpleNamespace(
+            use_project=lambda project_dir: None,
+            profile="selected",
+            profile_source="--profile",
+            output="text",
+            client=lambda: client,
+        ),
     )
 
     assert result.exit_code != 0
@@ -848,7 +902,13 @@ def test_deploy_prunes_tool_resources_after_successful_rollout(
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path)],
-        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+        obj=SimpleNamespace(
+            use_project=lambda project_dir: None,
+            profile="selected",
+            profile_source="--profile",
+            output="text",
+            client=lambda: client,
+        ),
     )
 
     assert result.exit_code == 0, result.output
@@ -878,7 +938,13 @@ def test_deploy_json_labels_only_uc_workspace_grants_as_additive(
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path)],
-        obj=SimpleNamespace(profile="selected", output="json", client=lambda: client),
+        obj=SimpleNamespace(
+            use_project=lambda project_dir: None,
+            profile="selected",
+            profile_source="--profile",
+            output="json",
+            client=lambda: client,
+        ),
     )
 
     assert result.exit_code == 0, result.output
@@ -908,7 +974,13 @@ def test_tool_access_failure_stops_before_source_rollout(
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path)],
-        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+        obj=SimpleNamespace(
+            use_project=lambda project_dir: None,
+            profile="selected",
+            profile_source="--profile",
+            output="text",
+            client=lambda: client,
+        ),
     )
 
     assert result.exit_code != 0

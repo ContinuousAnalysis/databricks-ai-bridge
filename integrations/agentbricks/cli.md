@@ -27,8 +27,20 @@ See [Installation](README.md#installation) for installing from source and for sh
 ## Authentication
 
 Agent Bricks CLI authenticates with a [Databricks configuration profile](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
-Run `agentbricks login` once to save a default profile, or pass `--profile` / `-p` on any command. Without
-a profile, the Databricks SDK's default authentication resolution is used. See
+Run `agentbricks login` once to save a default profile, or pass `--profile` / `-p` on any command. The
+profile is resolved in this order, most to least specific:
+
+1. `--profile` / `-p`
+2. the profile saved by `agentbricks login`
+3. the `DATABRICKS_CONFIG_PROFILE` environment variable
+4. the project `.env`'s `DATABRICKS_CONFIG_PROFILE` — only for the project-aware commands `dev` and
+   `deploy`, which resolve against their source directory so the CLI and the locally running agent
+   (which reads the same `.env`) use one profile
+5. none — the Databricks SDK's default authentication resolution
+
+`dev` also passes the resolved profile to the agent (unless `.env` sets `DATABRICKS_HOST` /
+`DATABRICKS_TOKEN`, in which case the agent uses those credentials), and prints the resolved profile
+and its host; `deploy` prints them in its success output. See
 [Authentication](README.md#authentication) for details.
 
 ## Global options
@@ -38,7 +50,7 @@ These options apply to every command. Pass them before the command name, for exa
 
 | Option | Values | Default | Description |
 | --- | --- | --- | --- |
-| `--profile <PROFILE>` (`-p`) | string | - | `~/.databrickscfg` profile to authenticate with. |
+| `--profile <PROFILE>` (`-p`) | string | - | `~/.databrickscfg` profile to authenticate with. Highest-precedence input to the resolution described under [Authentication](#authentication). |
 | `--output <text\|json>` (`-o`) | `text` \| `json` | `text` | Output format. Use `json` for scripting. |
 | `--version` | flag | - | Show the version and exit. |
 | `--help` (`-h`) | flag | - | Show help for the command and exit. Works at every level. |
@@ -125,7 +137,7 @@ _Options_
 | --- | --- | --- | --- | --- |
 | `--framework <langgraph|openai>` | `langgraph` \| `openai` | - | no | Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK). |
 | `--server <agentbricks|custom>` | `agentbricks` \| `custom` | `agentbricks` | no | Use the managed invocation server (`agentbricks` is the existing `agent.toml` value) or a minimal custom FastAPI server. |
-| `--profile <PROFILE>` | string | - | no | Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `agentbricks dev` works immediately (defaults to the profile from -p / `agentbricks login`). |
+| `--profile <PROFILE>` | string | - | no | Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `agentbricks dev` works immediately (defaults to the resolved profile from -p / `agentbricks login` / DATABRICKS_CONFIG_PROFILE). |
 | `--disable-chat-app` | flag | - | no | Scaffold the API-only backend, without the browser chat app. |
 | `--enable-chat-app` | flag | - | no | Deprecated: the chat app is included by default; this flag is a no-op. |
 | `--memory-store <MEMORY_STORE>` | string | - | no | Name for the declared memory store (default: derived from the directory, <dir>-memory). Only --server agentbricks declares stores by default. |
@@ -164,7 +176,7 @@ Run your agent locally so you can try it before deploying.
 
 Starts the agent on a local server - by default http://localhost:8000 - and prints where to reach it: the chat UI if the project has one, otherwise a sample request against the agent's API.
 
-Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model serving through the AI Gateway on that profile - so there are no model keys to set up.
+Auth uses your Databricks profile, resolved in this order: `-p`, `agentbricks login`, `DATABRICKS_CONFIG_PROFILE`, then the project's `.env`. The agent reaches Databricks model serving through the AI Gateway on that profile - so there are no model keys to set up.
 
 Under the hood this wraps `databricks apps run-local`: it reads the command + env from `app.yaml` and runs the app the way the Apps runtime would, so local behavior matches a deployment. The environment is built on the first run and reused after; pass `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
