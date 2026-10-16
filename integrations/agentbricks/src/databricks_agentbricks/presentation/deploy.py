@@ -12,7 +12,7 @@ import pathlib
 from typing import Any, Optional
 
 from databricks_agentbricks.presentation import render
-from databricks_agentbricks.presentation.endpoint import print_agent_invoke_command
+from databricks_agentbricks.presentation.endpoint import agent_invoke_example
 from databricks_agentbricks.presentation.render import field
 from databricks_agentbricks.presentation.tracing import TRACING_BIND_COMMAND, experiment_url
 from databricks_agentbricks.services.deploy_service import DeployResult
@@ -274,5 +274,5 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
         f"Deployed agent '{result.deployment}'",
         fields=fields,
         next_steps=steps,
+        example=agent_invoke_example(result.deployment, uses_runtime_api=result.uses_runtime_api),
     )
-    print_agent_invoke_command(result.deployment, uses_runtime_api=result.uses_runtime_api)
