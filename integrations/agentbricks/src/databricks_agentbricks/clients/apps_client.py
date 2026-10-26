@@ -22,6 +22,7 @@ from typing import Any, Callable, Optional
 
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
+from databricks_agentbricks.clients.local_ports import accepts_connections
 from databricks_agentbricks.errors import AgentCliError
 
 DatabricksRunner = Callable[..., subprocess.CompletedProcess]
@@ -541,8 +542,15 @@ class AppsClient:
         *,
         prepare_environment: bool,
         app_port: Optional[int],
+        ready_port: Optional[int] = None,
+        on_ready: Optional[Callable[[], None]] = None,
     ) -> None:
-        """Run an app locally from a prepared manifest, streaming its output."""
+        """Run an app locally from a prepared manifest, streaming its output.
+
+        With ``ready_port``, ``on_ready`` is called once the app answers on that port, so the caller
+        can report success only when the app is actually up rather than as soon as run-local starts.
+        A failure is reported as "could not start" or "stopped" depending on whether it got that far.
+        """
         args = ["apps", "run-local"]
         if prepare_environment:
             args.append("--prepare-environment")
@@ -550,13 +558,43 @@ class AppsClient:
             args += ["--app-port", str(app_port)]
         # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
         args += ["--entry-point", entry_point_name]
-        self._run(
+        if ready_port is None:
+            self._run(
+                args,
+                self._profile,
+                cwd=str(source_dir),
+                action="Could not start the agent locally.",
+                env=_get_run_local_env(),
+            )
+            return
+
+        started = False
+
+        def _on_ready() -> None:
+            nonlocal started
+            started = True
+            if on_ready is not None:
+                on_ready()
+
+        result = self._run(
             args,
             self._profile,
+            check=False,
             cwd=str(source_dir),
-            action="Could not start the agent locally.",
             env=_get_run_local_env(),
+            ready_probe=lambda: accepts_connections(ready_port),
+            on_ready=_on_ready,
         )
+        if result.returncode != 0:
+            if started:
+                raise AgentCliError(
+                    "The local agent stopped unexpectedly.",
+                    hint="See the output above for the cause.",
+                )
+            raise AgentCliError(
+                "Could not start the agent locally.",
+                hint="See the output above for the cause.",
+            )
 
     def get_service_principal(self, app_name: str) -> Optional[str]:
         """The app's service principal client id (its Postgres role identity), or None if unavailable.

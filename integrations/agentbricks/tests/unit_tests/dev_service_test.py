@@ -154,6 +154,8 @@ def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
         "app.agentbricksdev.yaml",
         prepare_environment=True,
         app_port=9000,
+        ready_port=9000,
+        on_ready=None,
     )
 
 
@@ -175,6 +177,8 @@ def test_prepare_honors_explicit_environment_flag_and_default_port(
         "app.agentbricksdev.yaml",
         prepare_environment=False,
         app_port=None,
+        ready_port=8000,
+        on_ready=None,
     )
 
 
@@ -314,6 +318,8 @@ def test_prepare_and_run_remain_safe_when_tracing_does_not_start(
         "app.agentbricksdev.yaml",
         prepare_environment=False,
         app_port=8123,
+        ready_port=8123,
+        on_ready=None,
     )
 
 
