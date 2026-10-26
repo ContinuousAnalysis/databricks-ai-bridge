@@ -246,6 +246,97 @@ def test_cli_and_every_command_help_load(run_agentbricks) -> None:
         run_agentbricks(command, "--help")
 
 
+@pytest.mark.parametrize("root", ["sessions", "memory"])
+def test_installed_permission_cli_calls_workspace_api(run_agentbricks, tmp_path, root):
+    requests: queue.Queue[tuple[str, str, dict | None, str | None]] = queue.Queue()
+    permission = {
+        "principal": {"principal_type": "USER", "name": "reader@example.com"},
+        "permission": "READ",
+    }
+    kind = "session" if root == "sessions" else "memory"
+    key = f"{kind}_store_permissions"
+
+    class PermissionReceiver(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+        def respond(self, method, payload=None):
+            requests.put((method, self.path, payload, self.headers.get("Authorization")))
+            path = self.path.partition("?")[0]
+            if path.endswith("/permissions/self"):
+                result = permission
+            elif path.endswith("/permissions"):
+                result = {key: [permission]}
+            else:
+                result = {}
+            body = json.dumps(result).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self.respond("GET")
+
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            self.respond("POST", json.loads(body))
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), PermissionReceiver) as server:
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        config = tmp_path / "permissions.databrickscfg"
+        config.write_text(
+            f"[permissions]\nhost = http://127.0.0.1:{server.server_port}\ntoken = local-test-token\n"
+        )
+        environment = {"DATABRICKS_CONFIG_FILE": str(config), "AGENTBRICKS_DISABLE_TELEMETRY": "1"}
+
+        def run(*args):
+            return json.loads(
+                run_agentbricks(
+                    "--profile",
+                    "permissions",
+                    "--output",
+                    "json",
+                    root,
+                    "stores",
+                    "permissions",
+                    *args,
+                    env_override=environment,
+                ).stdout
+            )
+
+        try:
+            for operation in ("get", "list", "grant", "revoke"):
+                run_agentbricks(root, "stores", "permissions", operation, "--help")
+            assert run("get", "test-store") == permission
+            assert run("list", "test-store", "--all") == {key: [permission]}
+            assert (
+                run("grant", "test-store", "--user", "reader@example.com", "--permission", "READ")
+                == {}
+            )
+            assert run("revoke", "test-store", "--service-principal", "app-id", "--yes") == {}
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+
+    path = f"/api/2.0/agents/{kind}-stores/test-store/permissions"
+    # SDK authentication can make unauthenticated discovery requests before calling an API.
+    api_requests = [request for request in list(requests.queue) if request[1].startswith(path)]
+    assert api_requests == [
+        ("GET", path + "/self", None, "Bearer local-test-token"),
+        ("GET", path + "?page_size=25", None, "Bearer local-test-token"),
+        ("POST", path + ":grant", permission, "Bearer local-test-token"),
+        (
+            "POST",
+            path + ":revoke",
+            {"principal": {"principal_type": "SERVICE_PRINCIPAL", "name": "app-id"}},
+            "Bearer local-test-token",
+        ),
+    ]
+
+
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 def test_model_and_prompt_bindings_from_installed_cli(run_agentbricks, tmp_path, framework):
     """Exercise local binding commands through the shipped console script without auth."""
